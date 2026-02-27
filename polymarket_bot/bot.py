@@ -217,9 +217,10 @@ def main():
                     continue
 
                 q_lower = m.question.lower()
-                is_btc_market = ("btc" in q_lower) or ("bitcoin" in q_lower)
+                slug_lower = (m.slug or "").lower()
+                is_btc_market = ("btc" in q_lower) or ("bitcoin" in q_lower) or ("btc" in slug_lower) or ("bitcoin" in slug_lower)
 
-                if BTC_ONLY and not is_btc_market:
+                if BTC_ONLY and not FORCE_MARKET_SLUG_CONTAINS and not is_btc_market:
                     skip_non_btc += 1
                     continue
 
