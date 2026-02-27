@@ -552,33 +552,10 @@ def main():
                             forced_hits = 1
 
                 if forced_hits == 0:
-                    # Keep stepping +300 on miss; try multiple hops each loop.
-                    if AUTO_FORCE_SLUG_STEP and active_force_slug:
-                        visible_slugs = {(m.slug or "").lower() for m in markets}
-                        max_hops_on_miss = 2
-                        for hop in range(1, max_hops_on_miss + 1):
-                            stepped = _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
-                            if not stepped:
-                                break
-                            active_force_slug = stepped.lower()
-                            slug_changed_this_loop = True
-                            state = _load_force_state(active_force_slug)
-                            state["slug"] = active_force_slug
-                            state["last_step_ts"] = int(time.time())
-                            _save_force_state(state)
-
-                            print(
-                                f"Force slug miss -> advanced +{FORCE_SLUG_STEP_SIZE} x{hop} to '{active_force_slug}'",
-                                flush=True,
-                            )
-
-                            if any(active_force_slug in s for s in visible_slugs):
-                                forced_hits = 1
-                                break
-
+                    # On miss, do NOT keep hopping ahead; hold current target slug and wait.
                     if forced_hits == 0:
                         print(
-                            f"Force slug '{active_force_slug}' not present in fetched markets; waiting for correct round (no fallback trades this loop).",
+                            f"Force slug '{active_force_slug}' not present in fetched markets; holding this slug and waiting (no fallback trades).",
                             flush=True,
                         )
                         print("-" * 72, flush=True)
