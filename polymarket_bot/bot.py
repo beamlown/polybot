@@ -409,6 +409,23 @@ def main():
 
                         candidate = stepped
 
+                    # Fallback: if a single BTC 5m market is visible, lock onto its actual slug directly.
+                    if forced_hits == 0:
+                        btc5_slugs = []
+                        for m in markets:
+                            m_slug = (m.slug or "").lower()
+                            q = (m.question or "").lower()
+                            if ("btc-updown-5m" in m_slug) or ("bitcoin" in q and "up or down" in q and "5" in q):
+                                btc5_slugs.append(m_slug)
+                        if len(btc5_slugs) == 1 and btc5_slugs[0]:
+                            active_force_slug = btc5_slugs[0]
+                            state = _load_force_state(active_force_slug)
+                            state["slug"] = active_force_slug
+                            state["last_step_ts"] = int(time.time())
+                            _save_force_state(state)
+                            print(f"Force slug miss -> adopted visible btc5 slug: '{active_force_slug}'", flush=True)
+                            forced_hits = 1
+
                 if forced_hits == 0:
                     print(
                         f"Force slug '{active_force_slug}' not present in fetched markets; falling back to BTC filters this loop.",
