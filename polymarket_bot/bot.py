@@ -218,9 +218,9 @@ def _save_force_state(state: dict):
         pass
 
 
-def maybe_auto_step_force_slug(current_slug: str) -> str:
+def maybe_auto_step_force_slug(current_slug: str) -> tuple[str, int | None]:
     if not AUTO_FORCE_SLUG_STEP or not current_slug:
-        return current_slug
+        return current_slug, None
 
     state = _load_force_state(current_slug)
     # If env slug changed manually, sync state immediately.
@@ -228,12 +228,13 @@ def maybe_auto_step_force_slug(current_slug: str) -> str:
         state["slug"] = current_slug
         state["last_step_ts"] = int(time.time())
         _save_force_state(state)
-        return current_slug
+        return current_slug, FORCE_SLUG_STEP_SECONDS
 
     now_ts = int(time.time())
     last_ts = int(state.get("last_step_ts", 0))
-    if now_ts - last_ts < FORCE_SLUG_STEP_SECONDS:
-        return current_slug
+    elapsed = now_ts - last_ts
+    if elapsed < FORCE_SLUG_STEP_SECONDS:
+        return current_slug, max(0, FORCE_SLUG_STEP_SECONDS - elapsed)
 
     next_slug = _step_slug(current_slug, FORCE_SLUG_STEP_SIZE)
     if next_slug:
@@ -241,9 +242,9 @@ def maybe_auto_step_force_slug(current_slug: str) -> str:
         state["last_step_ts"] = now_ts
         _save_force_state(state)
         print(f"Clock step: force slug -> {next_slug}", flush=True)
-        return next_slug
+        return next_slug, FORCE_SLUG_STEP_SECONDS
 
-    return current_slug
+    return current_slug, None
 
 
 def main():
@@ -282,7 +283,10 @@ def main():
                 btc_prob, btc_reason = get_btc_signal_prob()
                 print(f"₿ Signal | {btc_reason}", flush=True)
 
-            active_force_slug = maybe_auto_step_force_slug(FORCE_MARKET_SLUG_CONTAINS)
+            active_force_slug, step_eta = maybe_auto_step_force_slug(FORCE_MARKET_SLUG_CONTAINS)
+            if step_eta is not None:
+                print(f"⏱️ Next slug step in: {step_eta}s", flush=True)
+
             if AUTO_BTC_5M_CLOB_DISCOVERY and not active_force_slug:
                 discovered_slug, reason = discover_latest_btc_5m_slug()
                 if discovered_slug:
