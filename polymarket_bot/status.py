@@ -130,11 +130,16 @@ for market_id, p in positions.items():
 
 position_rows.sort(key=lambda x: x["pnl"], reverse=True)
 
-print(f"Total trades: {total}")
-print(f"Total notional: ${notional:.2f}")
-print(f"Portfolio unrealized PnL: {color_money(portfolio_pnl)}")
+print("=" * 64)
+print("POLYMARKET PAPER BOT STATUS")
+print("=" * 64)
+print(f"Total trades           : {total}")
+print(f"Total notional         : ${notional:.2f}")
+print(f"Portfolio unrealized   : {color_money(portfolio_pnl)}")
+print("=" * 64)
 
-print("\nPositions (best -> worst):")
+print("\nPOSITIONS (BEST -> WORST)")
+print("-" * 64)
 if not position_rows:
     print("- No open paper positions yet.")
 else:
@@ -146,13 +151,16 @@ else:
         elif row["pnl_pct"] < 0:
             pct = f"{RED}{pct}{RESET}"
 
-        print(
-            f"- {row['market_id']} | qty={row['qty']:.4f} | entry={row['avg_entry']:.4f} | mark={row['mark']} | pnl={pnl_str} ({pct})"
-        )
+        print(f"{row['market_id']}  |  pnl={pnl_str} ({pct})")
+        print(f"  qty={row['qty']:.2f}  entry={row['avg_entry']:.4f}  mark={row['mark']}")
         print(f"  {row['question']}")
+        print()
 
-print("\nLast trades:")
+print("\nRECENT TRADES (LATEST 10)")
+print("-" * 64)
 for r in recent_rows:
     ts, market_id, question, side, price, size, note = r
-    print(f"- {ts} | {market_id} | {side} @ {price} size={size:.4f} | {note}")
+    print(f"{ts}  |  {market_id}  |  {side}")
+    print(f"  entry={price}  size={size:.2f}  note={note}")
     print(f"  {question}")
+    print()
