@@ -17,6 +17,7 @@ class Market:
     yes_price: float  # 0..1
     signal_prob: float  # simple placeholder estimate
     end_date: str | None = None
+    slug: str | None = None
 
 
 class MarketClient:
@@ -149,6 +150,7 @@ class MarketClient:
                         yes_price=yes_price,
                         signal_prob=self._simple_signal_prob(yes_price),
                         end_date=end_date_raw,
+                        slug=m.get("slug") or event.get("slug"),
                     )
                 )
 

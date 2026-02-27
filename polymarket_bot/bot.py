@@ -41,6 +41,7 @@ MAX_PRICE = _env_float("MAX_PRICE", 0.85)
 BTC_ONLY = os.getenv("BTC_ONLY", "true").lower() == "true"
 BTC_FOCUS_MODE = os.getenv("BTC_FOCUS_MODE", "ultrashort").lower()  # ultrashort|any
 FORCE_MARKET_IDS = {x.strip() for x in os.getenv("FORCE_MARKET_IDS", "").split(",") if x.strip()}
+FORCE_MARKET_SLUG_CONTAINS = os.getenv("FORCE_MARKET_SLUG_CONTAINS", "").strip().lower()
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
 
@@ -203,6 +204,12 @@ def main():
                 if FORCE_MARKET_IDS and str(m.market_id) not in FORCE_MARKET_IDS:
                     skip_forced_market += 1
                     continue
+
+                if FORCE_MARKET_SLUG_CONTAINS:
+                    m_slug = (m.slug or "").lower()
+                    if FORCE_MARKET_SLUG_CONTAINS not in m_slug:
+                        skip_forced_market += 1
+                        continue
 
                 # Hard market-price filters to avoid tiny-price spam buys
                 if m.yes_price < MIN_PRICE or m.yes_price > MAX_PRICE:
