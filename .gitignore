@@ -2,3 +2,5 @@
 
 polymarket_bot/__pycache__/
 polymarket_bot/*.db
+
+polymarket_bot/.env
