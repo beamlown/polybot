@@ -2,7 +2,12 @@ import os
 import time
 import sqlite3
 from datetime import datetime, date
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv():
+        return False
 
 from data_client import MarketClient
 from strategy import fair_probability, should_buy_yes
@@ -10,12 +15,26 @@ from strategy import fair_probability, should_buy_yes
 
 load_dotenv()
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
-STARTING_BANKROLL = float(os.getenv("STARTING_BANKROLL", "200"))
-MAX_RISK_PER_TRADE_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.02"))
-MAX_DAILY_DRAWDOWN_PCT = float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "0.10"))
-MIN_EDGE = float(os.getenv("MIN_EDGE", "0.04"))
-LOOP_SECONDS = int(os.getenv("LOOP_SECONDS", "60"))
+STARTING_BANKROLL = _env_float("STARTING_BANKROLL", 200.0)
+MAX_RISK_PER_TRADE_PCT = _env_float("MAX_RISK_PER_TRADE_PCT", 0.02)
+MAX_DAILY_DRAWDOWN_PCT = _env_float("MAX_DAILY_DRAWDOWN_PCT", 0.10)
+MIN_EDGE = _env_float("MIN_EDGE", 0.04)
+LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
 
 
