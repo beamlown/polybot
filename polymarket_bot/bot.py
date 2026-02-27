@@ -11,6 +11,7 @@ except ImportError:
 
 from data_client import MarketClient
 from strategy import fair_probability, should_buy_yes
+from btc_signal import get_btc_signal_prob
 
 
 load_dotenv()
@@ -37,6 +38,7 @@ MAX_TRADES_PER_DAY = _env_int("MAX_TRADES_PER_DAY", 10)
 MIN_EDGE = _env_float("MIN_EDGE", 0.04)
 MIN_PRICE = _env_float("MIN_PRICE", 0.05)
 MAX_PRICE = _env_float("MAX_PRICE", 0.85)
+BTC_ONLY = os.getenv("BTC_ONLY", "true").lower() == "true"
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
 
@@ -169,12 +171,30 @@ def main():
             print(f"Fetched {len(markets)} active markets", flush=True)
             market_prices = {str(m.market_id): float(m.yes_price) for m in markets}
 
+            btc_prob = None
+            btc_reason = ""
+            if BTC_ONLY:
+                btc_prob, btc_reason = get_btc_signal_prob()
+                print(f"BTC signal: {btc_reason}", flush=True)
+
             for m in markets:
                 # Hard market-price filters to avoid tiny-price spam buys
                 if m.yes_price < MIN_PRICE or m.yes_price > MAX_PRICE:
                     continue
 
-                model_prob = fair_probability(m.signal_prob)
+                q_lower = m.question.lower()
+                is_btc_market = ("btc" in q_lower) or ("bitcoin" in q_lower)
+
+                if BTC_ONLY and not is_btc_market:
+                    continue
+
+                if BTC_ONLY:
+                    if btc_prob is None:
+                        continue
+                    model_prob = fair_probability(btc_prob)
+                else:
+                    model_prob = fair_probability(m.signal_prob)
+
                 if should_buy_yes(m.yes_price, model_prob, MIN_EDGE):
                     if already_traded_today(m.market_id, "BUY_YES"):
                         continue

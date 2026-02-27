@@ -45,6 +45,7 @@ python clob_sdk_test.py
 - Set `MAX_DAYS_TO_RESOLUTION` in `.env` to focus only near-term events
 - Or set `MAX_HOURS_TO_RESOLUTION` for tighter windows (e.g., `1` = resolves within 1 hour)
 - Set `REQUIRE_STARTED=true` to skip not-yet-started markets
+- Set `BTC_ONLY=true` to trade only BTC/Bitcoin markets with momentum signal
 
 ## Important
 - Starts in `PAPER_MODE=true`.
