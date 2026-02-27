@@ -10,7 +10,7 @@ except ImportError:
         return False
 
 from data_client import MarketClient
-from strategy import fair_probability, should_buy_yes
+from strategy import fair_probability, should_buy_yes, should_buy_no
 from btc_signal import get_btc_signal_prob
 
 
@@ -131,16 +131,23 @@ def max_position_size(bankroll: float, price: float) -> float:
 def unrealized_pnl(market_prices: dict[str, float]) -> float:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("SELECT market_id, price, size FROM trades WHERE side = 'BUY_YES'")
+    cur.execute("SELECT market_id, side, price, size FROM trades WHERE side IN ('BUY_YES','BUY_NO')")
     rows = cur.fetchall()
     conn.close()
 
     pnl = 0.0
-    for market_id, entry_price, size in rows:
+    for market_id, side, entry_price, size in rows:
         current_price = market_prices.get(str(market_id))
         if current_price is None:
             continue
-        pnl += (float(current_price) - float(entry_price)) * float(size)
+
+        entry_price = float(entry_price)
+        size = float(size)
+        if side == "BUY_YES":
+            pnl += (float(current_price) - entry_price) * size
+        elif side == "BUY_NO":
+            # NO contract value = 1 - YES price
+            pnl += ((1.0 - float(current_price)) - (1.0 - entry_price)) * size
     return pnl
 
 
@@ -195,8 +202,17 @@ def main():
                 else:
                     model_prob = fair_probability(m.signal_prob)
 
+                buy_side = None
+                edge_val = 0.0
                 if should_buy_yes(m.yes_price, model_prob, MIN_EDGE):
-                    if already_traded_today(m.market_id, "BUY_YES"):
+                    buy_side = "BUY_YES"
+                    edge_val = model_prob - m.yes_price
+                elif should_buy_no(m.yes_price, model_prob, MIN_EDGE):
+                    buy_side = "BUY_NO"
+                    edge_val = m.yes_price - model_prob
+
+                if buy_side:
+                    if already_traded_today(m.market_id, buy_side):
                         continue
 
                     # Recheck caps before each order
@@ -206,14 +222,16 @@ def main():
                         print("In-loop cap reached. Stopping new trades this cycle.", flush=True)
                         break
 
-                    size = max_position_size(bankroll, m.yes_price)
+                    # NO price is inverse of YES price
+                    entry_price = m.yes_price if buy_side == "BUY_YES" else (1.0 - m.yes_price)
+                    size = max_position_size(bankroll, entry_price)
                     if size <= 0:
                         continue
 
                     mode = "paper" if PAPER_MODE else "live"
-                    note = f"edge={round(model_prob - m.yes_price, 4)}"
-                    log_trade(m.market_id, m.question, "BUY_YES", m.yes_price, size, mode, note)
-                    print(f"[{mode}] BUY_YES {m.market_id} @ {m.yes_price} size={size:.4f} {note}", flush=True)
+                    note = f"edge={round(edge_val, 4)}"
+                    log_trade(m.market_id, m.question, buy_side, entry_price, size, mode, note)
+                    print(f"[{mode}] {buy_side} {m.market_id} @ {entry_price} size={size:.4f} {note}", flush=True)
 
             trades_today = trades_count_today()
             notional_today = today_trade_notional()

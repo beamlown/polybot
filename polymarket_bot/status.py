@@ -73,7 +73,7 @@ cur.execute("SELECT COALESCE(SUM(price * size), 0) FROM trades")
 notional = float(cur.fetchone()[0] or 0)
 
 cur.execute(
-    "SELECT market_id, question, price, size FROM trades WHERE side='BUY_YES'"
+    "SELECT market_id, question, side, price, size FROM trades WHERE side IN ('BUY_YES','BUY_NO')"
 )
 positions_raw = cur.fetchall()
 
@@ -85,10 +85,12 @@ conn.close()
 
 # Aggregate positions by market
 positions: dict[str, dict] = {}
-for market_id, question, price, size in positions_raw:
-    k = str(market_id)
+for market_id, question, side, price, size in positions_raw:
+    k = f"{market_id}:{side}"
     if k not in positions:
         positions[k] = {
+            "market_id": str(market_id),
+            "side": side,
             "question": question,
             "qty": 0.0,
             "cost": 0.0,
@@ -100,17 +102,22 @@ prices = fetch_market_prices()
 position_rows = []
 portfolio_pnl = 0.0
 
-for market_id, p in positions.items():
+for _, p in positions.items():
     qty = p["qty"]
     cost = p["cost"]
     avg_entry = (cost / qty) if qty else 0.0
-    current = prices.get(market_id)
+    current_yes = prices.get(p["market_id"])
 
-    if current is None:
+    if current_yes is None:
         pnl = 0.0
         pnl_pct = 0.0
         mark = "N/A"
     else:
+        if p["side"] == "BUY_YES":
+            current = current_yes
+        else:
+            current = 1.0 - current_yes
+
         pnl = (current - avg_entry) * qty
         pnl_pct = ((current - avg_entry) / avg_entry * 100.0) if avg_entry > 0 else 0.0
         mark = f"{current:.4f}"
@@ -118,7 +125,8 @@ for market_id, p in positions.items():
     portfolio_pnl += pnl
     position_rows.append(
         {
-            "market_id": market_id,
+            "market_id": p["market_id"],
+            "side": p["side"],
             "question": p["question"],
             "qty": qty,
             "avg_entry": avg_entry,
@@ -151,7 +159,7 @@ else:
         elif row["pnl_pct"] < 0:
             pct = f"{RED}{pct}{RESET}"
 
-        print(f"{row['market_id']}  |  pnl={pnl_str} ({pct})")
+        print(f"{row['market_id']} [{row['side']}]  |  pnl={pnl_str} ({pct})")
         print(f"  qty={row['qty']:.2f}  entry={row['avg_entry']:.4f}  mark={row['mark']}")
         print(f"  {row['question']}")
         print()

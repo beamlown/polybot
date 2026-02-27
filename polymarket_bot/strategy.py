@@ -15,3 +15,9 @@ def should_buy_yes(market_yes_price: float, model_prob: float, min_edge: float) 
     # Edge ≈ model fair prob - market implied prob
     edge = model_prob - market_yes_price
     return edge >= min_edge
+
+
+def should_buy_no(market_yes_price: float, model_prob: float, min_edge: float) -> bool:
+    # NO edge using yes-space: market_yes - model_prob
+    edge = market_yes_price - model_prob
+    return edge >= min_edge
