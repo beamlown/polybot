@@ -327,11 +327,18 @@ def _step_slug(slug: str, step: int) -> str | None:
 def _seconds_left_from_slug(slug: str | None) -> int | None:
     if not slug:
         return None
-    m = re.search(r"-(\d+)$", str(slug))
+
+    s = str(slug).lower()
+    # Only trust slug-clock timing for expected series format, e.g. btc-updown-15m-1772230500
+    m = re.search(rf"{re.escape('btc-updown')}-{ROUND_MINUTES}m-(\d{{10}})$", s)
     if not m:
         return None
+
     try:
         start_ts = int(m.group(1))
+        # Sanity guard for unix epoch seconds (avoid interpreting ids like 644395 as timestamps)
+        if start_ts < 1_600_000_000:
+            return None
         end_ts = start_ts + (ROUND_MINUTES * 60)
         return end_ts - int(time.time())
     except Exception:
