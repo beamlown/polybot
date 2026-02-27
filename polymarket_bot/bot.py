@@ -508,7 +508,7 @@ def main():
                     # Keep stepping +300 on miss; try multiple hops each loop.
                     if AUTO_FORCE_SLUG_STEP and active_force_slug:
                         visible_slugs = {(m.slug or "").lower() for m in markets}
-                        max_hops_on_miss = 6
+                        max_hops_on_miss = 2
                         for hop in range(1, max_hops_on_miss + 1):
                             stepped = _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
                             if not stepped:
