@@ -43,6 +43,7 @@ MAX_TRADES_PER_DAY = _env_int("MAX_TRADES_PER_DAY", 10)
 MAX_ENTRIES_PER_MARKET_PER_DAY = _env_int("MAX_ENTRIES_PER_MARKET_PER_DAY", 3)
 REENTRY_COOLDOWN_SECONDS = _env_int("REENTRY_COOLDOWN_SECONDS", 20)
 MIN_EDGE = _env_float("MIN_EDGE", 0.04)
+MIN_MODEL_CONFIDENCE = _env_float("MIN_MODEL_CONFIDENCE", 0.05)
 MIN_PRICE = _env_float("MIN_PRICE", 0.05)
 MAX_PRICE = _env_float("MAX_PRICE", 0.85)
 BTC_ONLY = os.getenv("BTC_ONLY", "true").lower() == "true"
@@ -581,6 +582,11 @@ def main():
                     model_prob = fair_probability(btc_prob)
                 else:
                     model_prob = fair_probability(m.signal_prob)
+
+                # Confidence gate: skip weak near-50/50 signals
+                if abs(model_prob - 0.5) < MIN_MODEL_CONFIDENCE:
+                    skip_edge += 1
+                    continue
 
                 up_is_yes = _infer_up_is_yes(m.outcomes)
                 market_up_price = m.yes_price if up_is_yes else (1.0 - m.yes_price)
