@@ -506,10 +506,12 @@ def main():
 
                 if forced_hits == 0:
                     print(
-                        f"Force slug '{active_force_slug}' not present in fetched markets; falling back to BTC filters this loop.",
+                        f"Force slug '{active_force_slug}' not present in fetched markets; waiting for correct round (no fallback trades this loop).",
                         flush=True,
                     )
-                    active_force_slug = ""
+                    print("-" * 72, flush=True)
+                    time.sleep(LOOP_SECONDS)
+                    continue
 
             skip_forced_market = 0
             skip_non_btc = 0
