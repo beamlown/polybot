@@ -61,6 +61,7 @@ AUTO_FORCE_SLUG_STEP = os.getenv("AUTO_FORCE_SLUG_STEP", "true").lower() == "tru
 ALIGN_STEP_TO_CLOCK = os.getenv("ALIGN_STEP_TO_CLOCK", "true").lower() == "true"
 AUTO_SLUG_FROM_URL = os.getenv("AUTO_SLUG_FROM_URL", "true").lower() == "true"
 CURRENT_EVENT_URL = os.getenv("CURRENT_EVENT_URL", "").strip()
+ROUND_MINUTES = _env_int("ROUND_MINUTES", 5)
 STEP_ON_MISS = os.getenv("STEP_ON_MISS", "true").lower() == "true"
 MAX_HOPS_ON_MISS = _env_int("MAX_HOPS_ON_MISS", 2)
 FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
@@ -293,9 +294,10 @@ def maybe_auto_cashout(market_prices: dict[str, float]) -> tuple[bool, float]:
 
 
 def is_ultrashort_btc_market(question_lower: str) -> bool:
-    five_min_hint = ("5m" in question_lower) or ("5 min" in question_lower) or ("5-minute" in question_lower) or ("5 minute" in question_lower)
+    minute_token = f"{ROUND_MINUTES}m"
+    minute_hint = (minute_token in question_lower) or (f"{ROUND_MINUTES} min" in question_lower) or (f"{ROUND_MINUTES}-minute" in question_lower) or (f"{ROUND_MINUTES} minute" in question_lower)
     updown_hint = ("up or down" in question_lower) or ("higher or lower" in question_lower)
-    return five_min_hint and updown_hint
+    return minute_hint and updown_hint
 
 
 def _infer_up_is_yes(outcomes: list[str] | None) -> bool:
@@ -329,9 +331,8 @@ def _seconds_left_from_slug(slug: str | None) -> int | None:
     if not m:
         return None
     try:
-        # btc-updown-5m-* slugs use epoch seconds at round start.
         start_ts = int(m.group(1))
-        end_ts = start_ts + 300
+        end_ts = start_ts + (ROUND_MINUTES * 60)
         return end_ts - int(time.time())
     except Exception:
         return None
@@ -345,7 +346,8 @@ def _align_slug_to_current_round(slug: str | None) -> str | None:
         return None
     prefix = m.group(1)
     now_ts = int(time.time())
-    round_start = (now_ts // 300) * 300
+    interval = max(60, ROUND_MINUTES * 60)
+    round_start = (now_ts // interval) * interval
     return f"{prefix}{round_start}"
 
 
@@ -353,8 +355,10 @@ def _slug_from_event_url(url: str | None) -> str | None:
     if not url:
         return None
 
+    pat = rf"/event/(btc-updown-{ROUND_MINUTES}m-\d+)"
+
     # 1) direct parse from provided URL
-    m = re.search(r"/event/(btc-updown-5m-\d+)", str(url).lower())
+    m = re.search(pat, str(url).lower())
     if m:
         return m.group(1)
 
@@ -362,7 +366,7 @@ def _slug_from_event_url(url: str | None) -> str | None:
     try:
         r = requests.get(url, timeout=8, allow_redirects=True)
         final_url = str(r.url).lower()
-        m2 = re.search(r"/event/(btc-updown-5m-\d+)", final_url)
+        m2 = re.search(pat, final_url)
         if m2:
             return m2.group(1)
     except Exception:
