@@ -372,13 +372,25 @@ def main():
             spent_today = today_trade_notional()
             trade_count = trades_count_today()
 
-            if spent_today >= daily_cap:
-                print("Daily risk cap reached. Sleeping...", flush=True)
-                time.sleep(LOOP_SECONDS)
-                continue
+            if spent_today >= daily_cap or trade_count >= MAX_TRADES_PER_DAY:
+                cap_reason = "risk" if spent_today >= daily_cap else "trade-count"
+                print(f"⏸️ Cap reached ({cap_reason}). Monitor mode...", flush=True)
 
-            if trade_count >= MAX_TRADES_PER_DAY:
-                print("Daily trade-count cap reached. Sleeping...", flush=True)
+                markets = client.fetch_markets()
+                market_prices = {str(m.market_id): float(m.yes_price) for m in markets}
+                mtm = unrealized_pnl(market_prices)
+                pnl_colored = color_pnl(mtm)
+                print(
+                    f"📊 Status | trades: {trade_count}/{MAX_TRADES_PER_DAY} | notional: ${spent_today:.2f} | unrealized: {pnl_colored}",
+                    flush=True,
+                )
+                top_positions = position_snapshot(market_prices, limit=3)
+                if top_positions:
+                    print("📌 Top positions (best→worst):", flush=True)
+                    for mid, side, p in top_positions:
+                        print(f"   {mid} [{side}] {color_pnl(p)}", flush=True)
+                print("-" * 72, flush=True)
+
                 time.sleep(LOOP_SECONDS)
                 continue
 
