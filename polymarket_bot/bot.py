@@ -64,6 +64,7 @@ CURRENT_EVENT_URL = os.getenv("CURRENT_EVENT_URL", "").strip()
 ROUND_MINUTES = _env_int("ROUND_MINUTES", 5)
 SERIES_PREFIX = os.getenv("SERIES_PREFIX", "btc-updown").lower()
 DEBUG_CANDIDATES = os.getenv("DEBUG_CANDIDATES", "true").lower() == "true"
+ENABLE_SLUG_PROMPT = os.getenv("ENABLE_SLUG_PROMPT", "true").lower() == "true"
 STEP_ON_MISS = os.getenv("STEP_ON_MISS", "true").lower() == "true"
 MAX_HOPS_ON_MISS = _env_int("MAX_HOPS_ON_MISS", 2)
 FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
@@ -384,6 +385,23 @@ def _slug_from_event_url(url: str | None) -> str | None:
     return None
 
 
+def _prompt_slug_override(current_slug: str) -> str:
+    if not ENABLE_SLUG_PROMPT:
+        return current_slug
+    try:
+        suffix = input("Enter current slug suffix now (example: 1772230800). Press Enter to keep current: ").strip()
+    except Exception:
+        return current_slug
+
+    if not suffix:
+        return current_slug
+    if not suffix.isdigit() or len(suffix) < 9:
+        print("Invalid suffix; keeping current slug.", flush=True)
+        return current_slug
+
+    return f"{SERIES_PREFIX}-{ROUND_MINUTES}m-{suffix}"
+
+
 def _load_force_state(default_slug: str) -> dict:
     if FORCE_SLUG_STATE_FILE.exists():
         try:
@@ -476,6 +494,9 @@ def main():
     client = MarketClient()
     bankroll = STARTING_BANKROLL
 
+    runtime_force_slug = FORCE_MARKET_SLUG_CONTAINS
+    runtime_force_slug = _prompt_slug_override(runtime_force_slug)
+
     print("=" * 72, flush=True)
     print("🚀 POLYMARKET PAPER BOT", flush=True)
     print(f"Mode: {'PAPER' if PAPER_MODE else 'LIVE'} | Bankroll: ${bankroll:.2f}", flush=True)
@@ -533,13 +554,14 @@ def main():
                 btc_prob, btc_reason = get_btc_signal_prob()
                 print(f"₿ Signal | {btc_reason}", flush=True)
 
-            base_force_slug = FORCE_MARKET_SLUG_CONTAINS
+            base_force_slug = runtime_force_slug
             if AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL:
                 slug_from_url = _slug_from_event_url(CURRENT_EVENT_URL)
                 if slug_from_url:
                     base_force_slug = slug_from_url
 
             active_force_slug, step_eta = maybe_auto_step_force_slug(base_force_slug)
+            runtime_force_slug = active_force_slug or runtime_force_slug
             slug_changed_this_loop = False
             if step_eta is not None:
                 print(f"⏱️ Next slug step in: {step_eta}s", flush=True)
@@ -632,11 +654,13 @@ def main():
                         continue
 
             if slug_changed_this_loop:
+                runtime_force_slug = active_force_slug or runtime_force_slug
                 print("🔄 New slug established; resetting expiry checks on next scan.", flush=True)
                 print("-" * 72, flush=True)
                 time.sleep(LOOP_SECONDS)
                 continue
 
+            runtime_force_slug = active_force_slug or runtime_force_slug
             skip_forced_market = 0
             skip_non_btc = 0
             skip_signal_unavailable = 0
