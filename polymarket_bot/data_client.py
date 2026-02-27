@@ -40,6 +40,8 @@ class MarketClient:
         self.auto_btc_5m = os.getenv("AUTO_BTC_5M", "true").lower() == "true"
         self.use_clob_markets = os.getenv("USE_CLOB_MARKETS", "true").lower() == "true"
         self.clob_pages = int(os.getenv("CLOB_MARKET_PAGES", "6"))
+        self.round_minutes = int(os.getenv("ROUND_MINUTES", "5"))
+        self.series_prefix = os.getenv("SERIES_PREFIX", "btc-updown").lower()
 
     def _fetch_events(self) -> list[dict]:
         if self.force_event_slug:
@@ -128,20 +130,36 @@ class MarketClient:
                     if self.force_event_slug and self.force_event_slug.lower() not in slug.lower():
                         continue
 
-                    if self.auto_btc_5m:
-                        text = f"{slug.lower()} {question.lower()}"
-                        if "btc-updown-5m" not in text and not ("bitcoin" in text and "up or down" in text and "5" in text):
-                            continue
+                    text = f"{slug.lower()} {question.lower()}"
+                    target_token = f"{self.series_prefix}-{self.round_minutes}m"
+                    if target_token not in text:
+                        continue
 
-                    end_date_raw = m.get("end_date_iso")
-                    if end_date_raw:
-                        try:
-                            end_dt = datetime.fromisoformat(str(end_date_raw).replace("Z", "+00:00"))
-                            days_left = (end_dt - now).total_seconds() / 86400
-                            if days_left < 0:
+                    # Prefer slug-timestamp timing for fast rounds.
+                    slug_ts = None
+                    try:
+                        slug_ts = int(slug.rsplit("-", 1)[-1])
+                    except Exception:
+                        slug_ts = None
+
+                    if slug_ts is not None:
+                        end_ts = slug_ts + (self.round_minutes * 60)
+                        now_ts = int(datetime.now(timezone.utc).timestamp())
+                        # keep current/near-future rounds only
+                        if end_ts < (now_ts - 20):
+                            continue
+                        if slug_ts > (now_ts + self.round_minutes * 60):
+                            continue
+                    else:
+                        end_date_raw = m.get("end_date_iso")
+                        if end_date_raw:
+                            try:
+                                end_dt = datetime.fromisoformat(str(end_date_raw).replace("Z", "+00:00"))
+                                days_left = (end_dt - now).total_seconds() / 86400
+                                if days_left < 0:
+                                    continue
+                            except Exception:
                                 continue
-                        except Exception:
-                            pass
 
                     tokens = m.get("tokens") or []
                     if not isinstance(tokens, list) or len(tokens) < 2:
@@ -177,6 +195,18 @@ class MarketClient:
                     break
         except Exception:
             return []
+
+        # Keep only latest round(s) for configured series to avoid stale spam.
+        def _slug_epoch(mk: Market) -> int:
+            try:
+                return int(str(mk.slug).rsplit("-", 1)[-1])
+            except Exception:
+                return 0
+
+        markets.sort(key=_slug_epoch, reverse=True)
+        if markets:
+            latest = _slug_epoch(markets[0])
+            markets = [m for m in markets if _slug_epoch(m) == latest]
 
         return markets
 
