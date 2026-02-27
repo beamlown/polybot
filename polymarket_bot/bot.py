@@ -1,7 +1,7 @@
 import os
 import time
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, UTC
 
 try:
     from dotenv import load_dotenv
@@ -65,7 +65,7 @@ def log_trade(market_id: str, question: str, side: str, price: float, size: floa
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO trades (ts, market_id, question, side, price, size, mode, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (datetime.utcnow().isoformat(), market_id, question, side, price, size, mode, note),
+        (datetime.now(UTC).isoformat(), market_id, question, side, price, size, mode, note),
     )
     conn.commit()
     conn.close()
@@ -93,7 +93,7 @@ def main():
     client = MarketClient()
     bankroll = STARTING_BANKROLL
 
-    print(f"Bot started | PAPER_MODE={PAPER_MODE} | bankroll={bankroll}")
+    print(f"Bot started | PAPER_MODE={PAPER_MODE} | bankroll={bankroll}", flush=True)
 
     while True:
         try:
