@@ -43,6 +43,7 @@ python clob_sdk_test.py
 - `status.bat` → show recent paper trades summary
 - `live_monitor.bat` → auto-refresh status every 10 seconds
 - `cashout.bat` → compute paper realized PnL at current marks, archive DB, reset session
+- Auto cashout in bot loop: `AUTO_TAKE_PROFIT_PCT=0.25` and `AUTO_REENTER_AFTER_CASHOUT=true`
 - Set `MAX_DAYS_TO_RESOLUTION` in `.env` to focus only near-term events
 - Or set `MAX_HOURS_TO_RESOLUTION` for tighter windows (e.g., `1` = resolves within 1 hour)
 - Set `REQUIRE_STARTED=true` to skip not-yet-started markets

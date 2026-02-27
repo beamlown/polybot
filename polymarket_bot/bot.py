@@ -2,6 +2,7 @@ import os
 import time
 import json
 import re
+import shutil
 import sqlite3
 from pathlib import Path
 from datetime import datetime, date, UTC
@@ -55,8 +56,11 @@ FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
 FORCE_SLUG_STEP_SECONDS = _env_int("FORCE_SLUG_STEP_SECONDS", 300)
 MIN_SECONDS_TO_EXPIRY = _env_int("MIN_SECONDS_TO_EXPIRY", 20)
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
+AUTO_TAKE_PROFIT_PCT = _env_float("AUTO_TAKE_PROFIT_PCT", 0.25)
+AUTO_REENTER_AFTER_CASHOUT = os.getenv("AUTO_REENTER_AFTER_CASHOUT", "true").lower() == "true"
 DB_PATH = "trades.db"
 FORCE_SLUG_STATE_FILE = Path("force_slug_state.json")
+CASHOUT_ARCHIVE_DIR = Path("cashout_archive")
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -223,6 +227,32 @@ def position_snapshot(market_prices: dict[str, float], limit: int = 3) -> list[t
 
     out.sort(key=lambda x: x[2], reverse=True)
     return out[:limit]
+
+
+def maybe_auto_cashout(market_prices: dict[str, float]) -> tuple[bool, float]:
+    notional = today_trade_notional()
+    if notional <= 0:
+        return False, 0.0
+
+    pnl_now = unrealized_pnl(market_prices)
+    target = notional * AUTO_TAKE_PROFIT_PCT
+    if pnl_now < target:
+        return False, pnl_now
+
+    # Archive and reset DB as a paper "cash out"
+    CASHOUT_ARCHIVE_DIR.mkdir(exist_ok=True)
+    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    archived = CASHOUT_ARCHIVE_DIR / f"trades_{ts}.db"
+    try:
+        if Path(DB_PATH).exists():
+            shutil.copy2(DB_PATH, archived)
+            Path(DB_PATH).unlink(missing_ok=True)
+        init_db()
+        print(f"💰 Auto-cashout hit ({AUTO_TAKE_PROFIT_PCT*100:.0f}% target): {color_pnl(pnl_now)} | archived -> {archived}", flush=True)
+        return True, pnl_now
+    except Exception as e:
+        print(f"Cashout error: {e}", flush=True)
+        return False, pnl_now
 
 
 def is_ultrashort_btc_market(question_lower: str) -> bool:
@@ -546,6 +576,10 @@ def main():
                 f"📊 Status | trades: {trades_today}/{MAX_TRADES_PER_DAY} | notional: ${notional_today:.2f} | unrealized: {pnl_colored}",
                 flush=True,
             )
+
+            cashed_out, pnl_now = maybe_auto_cashout(market_prices)
+            if cashed_out and AUTO_REENTER_AFTER_CASHOUT:
+                print("🔁 Re-enter mode: ready for next setups after cashout.", flush=True)
 
             top_positions = position_snapshot(market_prices, limit=3)
             if top_positions:
