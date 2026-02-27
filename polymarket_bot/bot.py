@@ -40,6 +40,18 @@ MAX_PRICE = _env_float("MAX_PRICE", 0.85)
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
 
+GREEN = "\033[92m"
+RED = "\033[91m"
+RESET = "\033[0m"
+
+
+def color_pnl(value: float) -> str:
+    if value > 0:
+        return f"{GREEN}${value:.2f}{RESET}"
+    if value < 0:
+        return f"{RED}-${abs(value):.2f}{RESET}"
+    return f"${value:.2f}"
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -186,8 +198,9 @@ def main():
             trades_today = trades_count_today()
             notional_today = today_trade_notional()
             mtm = unrealized_pnl(market_prices)
+            pnl_colored = color_pnl(mtm)
             print(
-                f"Status | trades_today={trades_today}/{MAX_TRADES_PER_DAY} | notional_today=${notional_today:.2f} | unrealized_pnl=${mtm:.2f}",
+                f"Status | trades_today={trades_today}/{MAX_TRADES_PER_DAY} | notional_today=${notional_today:.2f} | unrealized_pnl={pnl_colored}",
                 flush=True,
             )
 
