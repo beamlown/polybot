@@ -155,11 +155,20 @@ def unrealized_pnl(market_prices: dict[str, float]) -> float:
 
         entry_price = float(entry_price)
         size = float(size)
+        yes_now = max(0.0, min(1.0, float(current_price)))
+
         if side == "BUY_YES":
-            pnl += (float(current_price) - entry_price) * size
+            raw = (yes_now - entry_price) * size
+            min_loss = -entry_price * size
+            max_gain = (1.0 - entry_price) * size
+            pnl += max(min(raw, max_gain), min_loss)
         elif side == "BUY_NO":
             # NO contract value = 1 - YES price
-            pnl += ((1.0 - float(current_price)) - (1.0 - entry_price)) * size
+            no_now = 1.0 - yes_now
+            raw = (no_now - entry_price) * size
+            min_loss = -entry_price * size
+            max_gain = (1.0 - entry_price) * size
+            pnl += max(min(raw, max_gain), min_loss)
     return pnl
 
 
