@@ -25,7 +25,8 @@ class MarketClient:
     def __init__(self):
         self.timeout = int(os.getenv("HTTP_TIMEOUT_SECONDS", "20"))
         self.limit = int(os.getenv("EVENT_LIMIT", "100"))
-        self.max_days_to_resolution = int(os.getenv("MAX_DAYS_TO_RESOLUTION", "30"))
+        self.max_days_to_resolution = int(os.getenv("MAX_DAYS_TO_RESOLUTION", "7"))
+        self.require_started = os.getenv("REQUIRE_STARTED", "true").lower() == "true"
 
     def _fetch_events(self) -> list[dict]:
         params = {
@@ -74,6 +75,15 @@ class MarketClient:
             for m in event_markets:
                 if not m.get("active", True):
                     continue
+
+                start_date_raw = m.get("startDate") or event.get("startDate")
+                if self.require_started and start_date_raw:
+                    try:
+                        start_dt = datetime.fromisoformat(str(start_date_raw).replace("Z", "+00:00"))
+                        if start_dt > now:
+                            continue
+                    except Exception:
+                        pass
 
                 end_date_raw = m.get("endDate") or event.get("endDate")
                 if end_date_raw:

@@ -43,6 +43,7 @@ python clob_sdk_test.py
 - `status.bat` → show recent paper trades summary
 - `live_monitor.bat` → auto-refresh status every 10 seconds
 - Set `MAX_DAYS_TO_RESOLUTION` in `.env` to focus only near-term events
+- Set `REQUIRE_STARTED=true` to skip not-yet-started markets
 
 ## Important
 - Starts in `PAPER_MODE=true`.
