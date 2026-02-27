@@ -30,7 +30,14 @@ copy .env.example .env
 python bot.py
 ```
 
+5. (Optional) Test authenticated CLOB SDK connection (no order placement):
+
+```bash
+python clob_sdk_test.py
+```
+
 ## Important
 - Starts in `PAPER_MODE=true`.
 - Do NOT enable live mode until you validate with enough paper trades.
+- Never share your private key in chat; keep it only in your local `.env`.
 - This is educational tooling, not financial advice.
