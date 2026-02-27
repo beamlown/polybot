@@ -44,6 +44,10 @@ MAX_ENTRIES_PER_MARKET_PER_DAY = _env_int("MAX_ENTRIES_PER_MARKET_PER_DAY", 3)
 REENTRY_COOLDOWN_SECONDS = _env_int("REENTRY_COOLDOWN_SECONDS", 20)
 MIN_EDGE = _env_float("MIN_EDGE", 0.04)
 MIN_MODEL_CONFIDENCE = _env_float("MIN_MODEL_CONFIDENCE", 0.05)
+TIERED_ENTRY_MODE = os.getenv("TIERED_ENTRY_MODE", "true").lower() == "true"
+PROBE_EDGE = _env_float("PROBE_EDGE", 0.15)
+PROBE_RISK_PCT = _env_float("PROBE_RISK_PCT", 0.002)
+CONFIRM_RISK_PCT = _env_float("CONFIRM_RISK_PCT", 0.003)
 MIN_PRICE = _env_float("MIN_PRICE", 0.05)
 MAX_PRICE = _env_float("MAX_PRICE", 0.85)
 BTC_ONLY = os.getenv("BTC_ONLY", "true").lower() == "true"
@@ -161,8 +165,9 @@ def trades_count_today() -> int:
     return val
 
 
-def max_position_size(bankroll: float, price: float) -> float:
-    risk_dollars = bankroll * MAX_RISK_PER_TRADE_PCT
+def max_position_size(bankroll: float, price: float, risk_pct: float | None = None) -> float:
+    rp = MAX_RISK_PER_TRADE_PCT if risk_pct is None else max(0.0, risk_pct)
+    risk_dollars = bankroll * rp
     if price <= 0:
         return 0.0
     return risk_dollars / price
@@ -620,14 +625,29 @@ def main():
 
                     # NO price is inverse of YES price
                     entry_price = m.yes_price if buy_side == "BUY_YES" else (1.0 - m.yes_price)
-                    size = max_position_size(bankroll, entry_price)
+
+                    # Tiered sizing: small probe on extreme edge, larger confirm add-on.
+                    risk_pct = MAX_RISK_PER_TRADE_PCT
+                    tier_tag = "base"
+                    if TIERED_ENTRY_MODE:
+                        if entries_today_side == 0 and edge_val >= PROBE_EDGE:
+                            risk_pct = PROBE_RISK_PCT
+                            tier_tag = "probe"
+                        elif entries_today_side >= 1 and edge_val >= MIN_EDGE:
+                            risk_pct = CONFIRM_RISK_PCT
+                            tier_tag = "confirm"
+                        elif entries_today_side == 0:
+                            # no probe unless dislocation is large
+                            continue
+
+                    size = max_position_size(bankroll, entry_price, risk_pct=risk_pct)
                     if size <= 0:
                         continue
 
                     mode = "paper" if PAPER_MODE else "live"
                     outcomes_txt = "/".join(m.outcomes) if m.outcomes else "n/a"
                     map_txt = f"up_is_{'YES' if up_is_yes else 'NO'}"
-                    note = f"edge={round(edge_val, 4)} {map_txt} outcomes={outcomes_txt}"
+                    note = f"edge={round(edge_val, 4)} tier={tier_tag} risk_pct={risk_pct:.4f} {map_txt} outcomes={outcomes_txt}"
                     log_trade(m.market_id, m.question, buy_side, entry_price, size, mode, note)
                     trades_placed_this_loop += 1
                     side_emoji = "🟢" if buy_side == "BUY_YES" else "🔴"
