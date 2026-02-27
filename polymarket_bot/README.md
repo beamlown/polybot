@@ -36,6 +36,12 @@ python bot.py
 python clob_sdk_test.py
 ```
 
+## One-click scripts (Windows)
+- `setup_bot.bat` → install deps + create `.env`
+- `start_bot.bat` → run bot
+- `reset_and_run.bat` → clear `trades.db` + run bot
+- `status.bat` → show recent paper trades summary
+
 ## Important
 - Starts in `PAPER_MODE=true`.
 - Do NOT enable live mode until you validate with enough paper trades.
