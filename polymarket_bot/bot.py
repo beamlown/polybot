@@ -559,6 +559,8 @@ def main():
                                     _save_force_state(state)
                                     slug_advanced_on_expiry = True
                                     print(f"⏩ Expired round detected -> force slug advanced to {active_force_slug}", flush=True)
+                                    # Stop processing stale rows immediately; next loop will re-scan with new slug.
+                                    break
                             continue
                     except Exception:
                         pass
