@@ -184,19 +184,28 @@ def main():
                 btc_prob, btc_reason = get_btc_signal_prob()
                 print(f"BTC signal: {btc_reason}", flush=True)
 
+            skip_non_btc = 0
+            skip_signal_unavailable = 0
+            skip_price = 0
+            skip_edge = 0
+            trades_placed_this_loop = 0
+
             for m in markets:
                 # Hard market-price filters to avoid tiny-price spam buys
                 if m.yes_price < MIN_PRICE or m.yes_price > MAX_PRICE:
+                    skip_price += 1
                     continue
 
                 q_lower = m.question.lower()
                 is_btc_market = ("btc" in q_lower) or ("bitcoin" in q_lower)
 
                 if BTC_ONLY and not is_btc_market:
+                    skip_non_btc += 1
                     continue
 
                 if BTC_ONLY:
                     if btc_prob is None:
+                        skip_signal_unavailable += 1
                         continue
                     model_prob = fair_probability(btc_prob)
                 else:
@@ -210,6 +219,8 @@ def main():
                 elif should_buy_no(m.yes_price, model_prob, MIN_EDGE):
                     buy_side = "BUY_NO"
                     edge_val = m.yes_price - model_prob
+                else:
+                    skip_edge += 1
 
                 if buy_side:
                     if already_traded_today(m.market_id, buy_side):
@@ -231,7 +242,13 @@ def main():
                     mode = "paper" if PAPER_MODE else "live"
                     note = f"edge={round(edge_val, 4)}"
                     log_trade(m.market_id, m.question, buy_side, entry_price, size, mode, note)
+                    trades_placed_this_loop += 1
                     print(f"[{mode}] {buy_side} {m.market_id} @ {entry_price} size={size:.4f} {note}", flush=True)
+
+            print(
+                f"Loop debug | placed={trades_placed_this_loop} | skip_non_btc={skip_non_btc} | skip_signal={skip_signal_unavailable} | skip_price={skip_price} | skip_edge={skip_edge}",
+                flush=True,
+            )
 
             trades_today = trades_count_today()
             notional_today = today_trade_notional()
