@@ -50,6 +50,7 @@ AUTO_BTC_5M_CLOB_DISCOVERY = os.getenv("AUTO_BTC_5M_CLOB_DISCOVERY", "true").low
 AUTO_FORCE_SLUG_STEP = os.getenv("AUTO_FORCE_SLUG_STEP", "true").lower() == "true"
 FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
 FORCE_SLUG_STEP_SECONDS = _env_int("FORCE_SLUG_STEP_SECONDS", 300)
+MIN_SECONDS_TO_EXPIRY = _env_int("MIN_SECONDS_TO_EXPIRY", 20)
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
 FORCE_SLUG_STATE_FILE = Path("force_slug_state.json")
@@ -333,6 +334,7 @@ def main():
             skip_signal_unavailable = 0
             skip_price = 0
             skip_edge = 0
+            skip_near_expiry = 0
             trades_placed_this_loop = 0
 
             for m in markets:
@@ -345,6 +347,17 @@ def main():
                     if active_force_slug not in m_slug:
                         skip_forced_market += 1
                         continue
+
+                # Skip stale/almost-finished rounds so we don't trade prior event windows
+                if m.end_date:
+                    try:
+                        end_dt = datetime.fromisoformat(str(m.end_date).replace("Z", "+00:00"))
+                        seconds_left = int((end_dt - datetime.now(UTC)).total_seconds())
+                        if seconds_left <= MIN_SECONDS_TO_EXPIRY:
+                            skip_near_expiry += 1
+                            continue
+                    except Exception:
+                        pass
 
                 # Hard market-price filters to avoid tiny-price spam buys
                 if m.yes_price < MIN_PRICE or m.yes_price > MAX_PRICE:
@@ -414,7 +427,7 @@ def main():
                     print(f"{side_emoji} Trade | {buy_side} | market={m.market_id} | entry={entry_price:.4f} | size={size:.4f} | {note}", flush=True)
 
             print(
-                f"🧪 Debug | placed={trades_placed_this_loop} | skip_forced={skip_forced_market} | skip_non_btc={skip_non_btc} | skip_signal={skip_signal_unavailable} | skip_price={skip_price} | skip_edge={skip_edge}",
+                f"🧪 Debug | placed={trades_placed_this_loop} | skip_forced={skip_forced_market} | skip_non_btc={skip_non_btc} | skip_signal={skip_signal_unavailable} | skip_near_expiry={skip_near_expiry} | skip_price={skip_price} | skip_edge={skip_edge}",
                 flush=True,
             )
 
