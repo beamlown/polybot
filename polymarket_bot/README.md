@@ -42,6 +42,7 @@ python clob_sdk_test.py
 - `reset_and_run.bat` → clear `trades.db` + run bot
 - `status.bat` → show recent paper trades summary
 - `live_monitor.bat` → auto-refresh status every 10 seconds
+- `cashout.bat` → compute paper realized PnL at current marks, archive DB, reset session
 - Set `MAX_DAYS_TO_RESOLUTION` in `.env` to focus only near-term events
 - Or set `MAX_HOURS_TO_RESOLUTION` for tighter windows (e.g., `1` = resolves within 1 hour)
 - Set `REQUIRE_STARTED=true` to skip not-yet-started markets
