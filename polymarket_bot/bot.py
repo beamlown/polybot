@@ -331,6 +331,18 @@ def _seconds_left_from_slug(slug: str | None) -> int | None:
         return None
 
 
+def _align_slug_to_current_round(slug: str | None) -> str | None:
+    if not slug:
+        return None
+    m = re.search(r"(.*-)(\d+)$", str(slug))
+    if not m:
+        return None
+    prefix = m.group(1)
+    now_ts = int(time.time())
+    round_start = (now_ts // 300) * 300
+    return f"{prefix}{round_start}"
+
+
 def _load_force_state(default_slug: str) -> dict:
     if FORCE_SLUG_STATE_FILE.exists():
         try:
@@ -625,10 +637,14 @@ def main():
                     if (
                         AUTO_FORCE_SLUG_STEP
                         and active_force_slug
-                        and (seconds_left < -30)
+                        and (seconds_left < -5)
                         and not slug_advanced_on_expiry
                     ):
-                        next_slug = _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
+                        aligned_slug = _align_slug_to_current_round(active_force_slug)
+                        next_slug = aligned_slug or _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
+                        if next_slug and next_slug.lower() == active_force_slug:
+                            next_slug = _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
+
                         if next_slug:
                             active_force_slug = next_slug.lower()
                             state = _load_force_state(active_force_slug)
@@ -637,7 +653,7 @@ def main():
                             _save_force_state(state)
                             slug_advanced_on_expiry = True
                             slug_changed_this_loop = True
-                            print(f"⏩ Expired round detected -> force slug advanced to {active_force_slug}", flush=True)
+                            print(f"⏩ Expired round detected -> jumped to current round slug {active_force_slug}", flush=True)
                             _save_expiry_spam_state({})
                             # Stop processing stale rows immediately; next loop will re-scan with new slug.
                             break
