@@ -194,6 +194,36 @@ def unrealized_pnl(market_prices: dict[str, float]) -> float:
     return pnl
 
 
+def position_snapshot(market_prices: dict[str, float], limit: int = 3) -> list[tuple[str, str, float]]:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT market_id, side, price, size FROM trades WHERE side IN ('BUY_YES','BUY_NO')")
+    rows = cur.fetchall()
+    conn.close()
+
+    agg: dict[str, dict] = {}
+    for market_id, side, price, size in rows:
+        key = f"{market_id}:{side}"
+        if key not in agg:
+            agg[key] = {"market_id": str(market_id), "side": side, "qty": 0.0, "cost": 0.0}
+        agg[key]["qty"] += float(size)
+        agg[key]["cost"] += float(price) * float(size)
+
+    out = []
+    for _, p in agg.items():
+        yes_now = market_prices.get(p["market_id"])
+        if yes_now is None:
+            continue
+        qty = p["qty"]
+        entry = (p["cost"] / qty) if qty else 0.0
+        curr = yes_now if p["side"] == "BUY_YES" else (1.0 - yes_now)
+        pnl = (curr - entry) * qty
+        out.append((p["market_id"], p["side"], pnl))
+
+    out.sort(key=lambda x: x[2], reverse=True)
+    return out[:limit]
+
+
 def is_ultrashort_btc_market(question_lower: str) -> bool:
     five_min_hint = ("5m" in question_lower) or ("5 min" in question_lower) or ("5-minute" in question_lower) or ("5 minute" in question_lower)
     updown_hint = ("up or down" in question_lower) or ("higher or lower" in question_lower)
@@ -472,6 +502,13 @@ def main():
                 f"📊 Status | trades: {trades_today}/{MAX_TRADES_PER_DAY} | notional: ${notional_today:.2f} | unrealized: {pnl_colored}",
                 flush=True,
             )
+
+            top_positions = position_snapshot(market_prices, limit=3)
+            if top_positions:
+                print("📌 Top positions (best→worst):", flush=True)
+                for mid, side, p in top_positions:
+                    print(f"   {mid} [{side}] {color_pnl(p)}", flush=True)
+
             print("-" * 72, flush=True)
 
             time.sleep(LOOP_SECONDS)
