@@ -511,6 +511,7 @@ def main():
             skip_price = 0
             skip_edge = 0
             skip_near_expiry = 0
+            slug_advanced_on_expiry = False
             trades_placed_this_loop = 0
 
             for m in markets:
@@ -531,6 +532,27 @@ def main():
                         seconds_left = int((end_dt - datetime.now(UTC)).total_seconds())
                         if seconds_left <= MIN_SECONDS_TO_EXPIRY:
                             skip_near_expiry += 1
+                            print(
+                                f"Expiry gate | market={m.market_id} seconds_left={seconds_left} min_required>{MIN_SECONDS_TO_EXPIRY}",
+                                flush=True,
+                            )
+
+                            # If forced slug is clearly stale, auto-jump to next slug immediately.
+                            if (
+                                AUTO_FORCE_SLUG_STEP
+                                and active_force_slug
+                                and (seconds_left < -30)
+                                and not slug_advanced_on_expiry
+                            ):
+                                next_slug = _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
+                                if next_slug:
+                                    active_force_slug = next_slug.lower()
+                                    state = _load_force_state(active_force_slug)
+                                    state["slug"] = active_force_slug
+                                    state["last_step_ts"] = int(time.time())
+                                    _save_force_state(state)
+                                    slug_advanced_on_expiry = True
+                                    print(f"⏩ Expired round detected -> force slug advanced to {active_force_slug}", flush=True)
                             continue
                     except Exception:
                         pass
