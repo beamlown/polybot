@@ -441,6 +441,7 @@ def main():
                 print(f"₿ Signal | {btc_reason}", flush=True)
 
             active_force_slug, step_eta = maybe_auto_step_force_slug(FORCE_MARKET_SLUG_CONTAINS)
+            slug_changed_this_loop = False
             if step_eta is not None:
                 print(f"⏱️ Next slug step in: {step_eta}s", flush=True)
 
@@ -474,6 +475,7 @@ def main():
 
                         if stepped_hits > 0:
                             active_force_slug = stepped
+                            slug_changed_this_loop = True
                             state = _load_force_state(active_force_slug)
                             state["slug"] = active_force_slug
                             state["last_step_ts"] = int(time.time())
@@ -497,6 +499,7 @@ def main():
                                 btc5_slugs.append(m_slug)
                         if len(btc5_slugs) == 1 and btc5_slugs[0]:
                             active_force_slug = btc5_slugs[0]
+                            slug_changed_this_loop = True
                             state = _load_force_state(active_force_slug)
                             state["slug"] = active_force_slug
                             state["last_step_ts"] = int(time.time())
@@ -514,6 +517,7 @@ def main():
                             if not stepped:
                                 break
                             active_force_slug = stepped.lower()
+                            slug_changed_this_loop = True
                             state = _load_force_state(active_force_slug)
                             state["slug"] = active_force_slug
                             state["last_step_ts"] = int(time.time())
@@ -536,6 +540,12 @@ def main():
                         print("-" * 72, flush=True)
                         time.sleep(LOOP_SECONDS)
                         continue
+
+            if slug_changed_this_loop:
+                print("🔄 New slug established; resetting expiry checks on next scan.", flush=True)
+                print("-" * 72, flush=True)
+                time.sleep(LOOP_SECONDS)
+                continue
 
             skip_forced_market = 0
             skip_non_btc = 0
@@ -584,6 +594,7 @@ def main():
                                     state["last_step_ts"] = int(time.time())
                                     _save_force_state(state)
                                     slug_advanced_on_expiry = True
+                                    slug_changed_this_loop = True
                                     print(f"⏩ Expired round detected -> force slug advanced to {active_force_slug}", flush=True)
                                     # Stop processing stale rows immediately; next loop will re-scan with new slug.
                                     break
@@ -680,6 +691,12 @@ def main():
                     trades_placed_this_loop += 1
                     side_emoji = "🟢" if buy_side == "BUY_YES" else "🔴"
                     print(f"{side_emoji} Trade | {buy_side} | market={m.market_id} | entry={entry_price:.4f} | size={size:.4f} | {note}", flush=True)
+
+            if slug_advanced_on_expiry:
+                print("🔄 Expired slug advanced; re-scanning next loop before new entries.", flush=True)
+                print("-" * 72, flush=True)
+                time.sleep(LOOP_SECONDS)
+                continue
 
             print(
                 f"🧪 Debug | placed={trades_placed_this_loop} | skip_forced={skip_forced_market} | skip_non_btc={skip_non_btc} | skip_signal={skip_signal_unavailable} | skip_near_expiry={skip_near_expiry} | skip_price={skip_price} | skip_edge={skip_edge}",
