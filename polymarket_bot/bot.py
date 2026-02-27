@@ -62,6 +62,8 @@ ALIGN_STEP_TO_CLOCK = os.getenv("ALIGN_STEP_TO_CLOCK", "true").lower() == "true"
 AUTO_SLUG_FROM_URL = os.getenv("AUTO_SLUG_FROM_URL", "true").lower() == "true"
 CURRENT_EVENT_URL = os.getenv("CURRENT_EVENT_URL", "").strip()
 ROUND_MINUTES = _env_int("ROUND_MINUTES", 5)
+SERIES_PREFIX = os.getenv("SERIES_PREFIX", "btc-updown").lower()
+DEBUG_CANDIDATES = os.getenv("DEBUG_CANDIDATES", "true").lower() == "true"
 STEP_ON_MISS = os.getenv("STEP_ON_MISS", "true").lower() == "true"
 MAX_HOPS_ON_MISS = _env_int("MAX_HOPS_ON_MISS", 2)
 FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
@@ -516,6 +518,14 @@ def main():
             markets = client.fetch_markets()
             print(f"\n🧭 Scan | Active markets: {len(markets)}", flush=True)
             market_prices = {str(m.market_id): float(m.yes_price) for m in markets}
+
+            if DEBUG_CANDIDATES:
+                token = f"{SERIES_PREFIX}-{ROUND_MINUTES}m"
+                cands = [m.slug for m in markets if m.slug and token in m.slug.lower()]
+                if cands:
+                    print(f"🔎 Candidate slugs ({token}): {', '.join(cands[:3])}", flush=True)
+                else:
+                    print(f"🔎 Candidate slugs ({token}): none", flush=True)
 
             btc_prob = None
             btc_reason = ""
