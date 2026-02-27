@@ -117,7 +117,12 @@ class MarketClient:
                     continue
 
                 yes_price = prices[0]
-                question = m.get("question") or m.get("title") or event.get("title") or "Unknown market"
+                market_q = m.get("question") or m.get("title") or ""
+                event_title = event.get("title") or ""
+                if market_q and event_title:
+                    question = f"{event_title} | {market_q}"
+                else:
+                    question = market_q or event_title or "Unknown market"
                 market_id = str(m.get("id") or m.get("conditionId") or m.get("slug") or "unknown")
 
                 if yes_price <= 0 or yes_price >= 1:
