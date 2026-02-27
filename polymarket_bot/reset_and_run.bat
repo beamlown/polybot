@@ -9,7 +9,10 @@ if exist trades.db (
   echo No trades.db found - starting fresh anyway.
 )
 
-set /p SLUG_SUFFIX=Enter current slug suffix (example: 1772230800) or press Enter to keep defaults: 
+set "SLUG_SUFFIX=%~1"
+if "%SLUG_SUFFIX%"=="" (
+  set /p SLUG_SUFFIX=Enter current slug suffix - example 1772230800 - or press Enter to keep defaults: 
+)
 if not "%SLUG_SUFFIX%"=="" (
   set "FORCE_MARKET_SLUG_CONTAINS=btc-updown-15m-%SLUG_SUFFIX%"
   set "FORCE_EVENT_SLUG=btc-updown-15m-%SLUG_SUFFIX%"
