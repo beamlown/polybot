@@ -50,6 +50,7 @@ python clob_sdk_test.py
 - Set `FORCE_MARKET_IDS=<id1,id2>` to trade only specific market IDs
 - Or set `FORCE_MARKET_SLUG_CONTAINS=<slug-text>` to lock by URL slug text
 - Set `AUTO_BTC_5M=true` to auto-rotate into newest BTC 5m up/down events when slugs change
+- Set `AUTO_BTC_5M_CLOB_DISCOVERY=true` to discover current BTC 5m slug from CLOB when no force slug is set
 - Set `FORCE_EVENT_SLUG=<event-slug>` to force trading a specific event (bypasses time filters)
 
 ## Important

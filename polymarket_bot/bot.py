@@ -12,6 +12,7 @@ except ImportError:
 from data_client import MarketClient
 from strategy import fair_probability, should_buy_yes, should_buy_no
 from btc_signal import get_btc_signal_prob
+from clob_discovery import discover_latest_btc_5m_slug
 
 
 load_dotenv()
@@ -42,6 +43,7 @@ BTC_ONLY = os.getenv("BTC_ONLY", "true").lower() == "true"
 BTC_FOCUS_MODE = os.getenv("BTC_FOCUS_MODE", "ultrashort").lower()  # ultrashort|any
 FORCE_MARKET_IDS = {x.strip() for x in os.getenv("FORCE_MARKET_IDS", "").split(",") if x.strip()}
 FORCE_MARKET_SLUG_CONTAINS = os.getenv("FORCE_MARKET_SLUG_CONTAINS", "").strip().lower()
+AUTO_BTC_5M_CLOB_DISCOVERY = os.getenv("AUTO_BTC_5M_CLOB_DISCOVERY", "true").lower() == "true"
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
 
@@ -193,6 +195,13 @@ def main():
                 btc_prob, btc_reason = get_btc_signal_prob()
                 print(f"BTC signal: {btc_reason}", flush=True)
 
+            active_force_slug = FORCE_MARKET_SLUG_CONTAINS
+            if AUTO_BTC_5M_CLOB_DISCOVERY and not active_force_slug:
+                discovered_slug, reason = discover_latest_btc_5m_slug()
+                if discovered_slug:
+                    active_force_slug = discovered_slug.lower()
+                print(f"CLOB discovery: {reason} slug={discovered_slug}", flush=True)
+
             skip_forced_market = 0
             skip_non_btc = 0
             skip_signal_unavailable = 0
@@ -205,9 +214,9 @@ def main():
                     skip_forced_market += 1
                     continue
 
-                if FORCE_MARKET_SLUG_CONTAINS:
+                if active_force_slug:
                     m_slug = (m.slug or "").lower()
-                    if FORCE_MARKET_SLUG_CONTAINS not in m_slug:
+                    if active_force_slug not in m_slug:
                         skip_forced_market += 1
                         continue
 
@@ -220,11 +229,11 @@ def main():
                 slug_lower = (m.slug or "").lower()
                 is_btc_market = ("btc" in q_lower) or ("bitcoin" in q_lower) or ("btc" in slug_lower) or ("bitcoin" in slug_lower)
 
-                if BTC_ONLY and not FORCE_MARKET_SLUG_CONTAINS and not is_btc_market:
+                if BTC_ONLY and not active_force_slug and not is_btc_market:
                     skip_non_btc += 1
                     continue
 
-                if BTC_ONLY and BTC_FOCUS_MODE == "ultrashort" and not FORCE_MARKET_SLUG_CONTAINS and not is_ultrashort_btc_market(q_lower):
+                if BTC_ONLY and BTC_FOCUS_MODE == "ultrashort" and not active_force_slug and not is_ultrashort_btc_market(q_lower):
                     skip_non_btc += 1
                     continue
 
