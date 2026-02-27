@@ -29,8 +29,20 @@ class MarketClient:
         self.max_hours_to_resolution = float(os.getenv("MAX_HOURS_TO_RESOLUTION", "0"))
         self.require_started = os.getenv("REQUIRE_STARTED", "true").lower() == "true"
         self.require_end_date = os.getenv("REQUIRE_END_DATE", "true").lower() == "true"
+        self.force_event_slug = os.getenv("FORCE_EVENT_SLUG", "").strip()
 
     def _fetch_events(self) -> list[dict]:
+        if self.force_event_slug:
+            params = {
+                "slug": self.force_event_slug,
+                "closed": "false",
+            }
+            resp = requests.get(f"{BASE_URL}/events", params=params, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list) and data:
+                return data
+
         params = {
             "closed": "false",
             "limit": self.limit,
@@ -78,8 +90,10 @@ class MarketClient:
                 if not m.get("active", True):
                     continue
 
+                apply_time_filters = not bool(self.force_event_slug)
+
                 start_date_raw = m.get("startDate") or event.get("startDate")
-                if self.require_started and start_date_raw:
+                if apply_time_filters and self.require_started and start_date_raw:
                     try:
                         start_dt = datetime.fromisoformat(str(start_date_raw).replace("Z", "+00:00"))
                         if start_dt > now:
@@ -94,10 +108,10 @@ class MarketClient:
                     or event.get("endDateIso")
                     or m.get("closedTime")
                 )
-                if not end_date_raw and self.require_end_date:
+                if apply_time_filters and (not end_date_raw and self.require_end_date):
                     continue
 
-                if end_date_raw:
+                if apply_time_filters and end_date_raw:
                     try:
                         end_dt = datetime.fromisoformat(str(end_date_raw).replace("Z", "+00:00"))
                         days_left = (end_dt - now).total_seconds() / 86400

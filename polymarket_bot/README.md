@@ -46,6 +46,7 @@ python clob_sdk_test.py
 - Or set `MAX_HOURS_TO_RESOLUTION` for tighter windows (e.g., `1` = resolves within 1 hour)
 - Set `REQUIRE_STARTED=true` to skip not-yet-started markets
 - Set `BTC_ONLY=true` to trade only BTC/Bitcoin markets with momentum signal
+- Set `FORCE_EVENT_SLUG=<event-slug>` to force trading a specific event (bypasses time filters)
 
 ## Important
 - Starts in `PAPER_MODE=true`.
