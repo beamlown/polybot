@@ -4,9 +4,9 @@ cd /d %~dp0
 
 if exist trades.db (
   del /f /q trades.db
-  echo Deleted trades.db (fresh paper day).
+  echo Deleted trades.db ^(fresh paper day^).
 ) else (
-  echo No trades.db found. Starting fresh anyway.
+  echo No trades.db found - starting fresh anyway.
 )
 
 py -3.14 bot.py
