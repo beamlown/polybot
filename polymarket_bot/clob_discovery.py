@@ -56,8 +56,18 @@ def _load_last_slug() -> str:
 
 
 def _slug_exists_active(slug: str) -> bool:
+    # Check both events and markets endpoints because some fast rounds appear as markets first.
     try:
         resp = requests.get(f"{GAMMA}/events", params={"slug": slug, "closed": "false"}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list) and len(data) > 0:
+            return True
+    except Exception:
+        pass
+
+    try:
+        resp = requests.get(f"{GAMMA}/markets", params={"slug": slug, "closed": "false", "limit": 5}, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         return isinstance(data, list) and len(data) > 0
@@ -113,15 +123,20 @@ def discover_latest_btc_5m_slug(max_pages: int = 12) -> tuple[Optional[str], str
             _save_last_slug(slug)
             return slug, f"clob_discovery_ok scanned={scanned}"
 
-        # Fallback heuristic: increment suffix by configured step
+        # Fallback heuristic: increment suffix by configured step (with multiple attempts)
         if os.getenv("ID_STEP_FALLBACK", "false").lower() == "true":
             step = int(os.getenv("ID_STEP_SIZE", "300"))
+            max_steps = int(os.getenv("ID_STEP_MAX_STEPS", "8"))
             last_slug = _load_last_slug()
             if last_slug:
-                candidate = _step_slug(last_slug, step)
-                if candidate and _slug_exists_active(candidate):
-                    _save_last_slug(candidate)
-                    return candidate, f"id_step_fallback_ok from={last_slug} to={candidate}"
+                candidate = last_slug
+                for i in range(max_steps):
+                    candidate = _step_slug(candidate, step)
+                    if not candidate:
+                        break
+                    if _slug_exists_active(candidate):
+                        _save_last_slug(candidate)
+                        return candidate, f"id_step_fallback_ok step={i+1} from={last_slug} to={candidate}"
 
         return None, f"clob_discovery_none scanned={scanned}"
     except Exception as e:
