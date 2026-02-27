@@ -28,6 +28,7 @@ class MarketClient:
         self.max_days_to_resolution = float(os.getenv("MAX_DAYS_TO_RESOLUTION", "7"))
         self.max_hours_to_resolution = float(os.getenv("MAX_HOURS_TO_RESOLUTION", "0"))
         self.require_started = os.getenv("REQUIRE_STARTED", "true").lower() == "true"
+        self.require_end_date = os.getenv("REQUIRE_END_DATE", "true").lower() == "true"
 
     def _fetch_events(self) -> list[dict]:
         params = {
@@ -86,7 +87,16 @@ class MarketClient:
                     except Exception:
                         pass
 
-                end_date_raw = m.get("endDate") or event.get("endDate")
+                end_date_raw = (
+                    m.get("endDate")
+                    or m.get("endDateIso")
+                    or event.get("endDate")
+                    or event.get("endDateIso")
+                    or m.get("closedTime")
+                )
+                if not end_date_raw and self.require_end_date:
+                    continue
+
                 if end_date_raw:
                     try:
                         end_dt = datetime.fromisoformat(str(end_date_raw).replace("Z", "+00:00"))
@@ -99,7 +109,8 @@ class MarketClient:
                         if days_left > max_days:
                             continue
                     except Exception:
-                        pass
+                        if self.require_end_date:
+                            continue
 
                 prices = self._parse_outcome_prices(m.get("outcomePrices"))
                 if not prices:
