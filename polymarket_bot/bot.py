@@ -57,6 +57,8 @@ FORCE_MARKET_SLUG_CONTAINS = os.getenv("FORCE_MARKET_SLUG_CONTAINS", "").strip()
 AUTO_BTC_5M_CLOB_DISCOVERY = os.getenv("AUTO_BTC_5M_CLOB_DISCOVERY", "true").lower() == "true"
 AUTO_FORCE_SLUG_STEP = os.getenv("AUTO_FORCE_SLUG_STEP", "true").lower() == "true"
 ALIGN_STEP_TO_CLOCK = os.getenv("ALIGN_STEP_TO_CLOCK", "true").lower() == "true"
+AUTO_SLUG_FROM_URL = os.getenv("AUTO_SLUG_FROM_URL", "true").lower() == "true"
+CURRENT_EVENT_URL = os.getenv("CURRENT_EVENT_URL", "").strip()
 FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
 FORCE_SLUG_STEP_SECONDS = _env_int("FORCE_SLUG_STEP_SECONDS", 300)
 MIN_SECONDS_TO_EXPIRY = _env_int("MIN_SECONDS_TO_EXPIRY", 20)
@@ -343,6 +345,13 @@ def _align_slug_to_current_round(slug: str | None) -> str | None:
     return f"{prefix}{round_start}"
 
 
+def _slug_from_event_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    m = re.search(r"/event/(btc-updown-5m-\d+)", str(url).lower())
+    return m.group(1) if m else None
+
+
 def _load_force_state(default_slug: str) -> dict:
     if FORCE_SLUG_STATE_FILE.exists():
         try:
@@ -484,7 +493,13 @@ def main():
                 btc_prob, btc_reason = get_btc_signal_prob()
                 print(f"₿ Signal | {btc_reason}", flush=True)
 
-            active_force_slug, step_eta = maybe_auto_step_force_slug(FORCE_MARKET_SLUG_CONTAINS)
+            base_force_slug = FORCE_MARKET_SLUG_CONTAINS
+            if AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL:
+                slug_from_url = _slug_from_event_url(CURRENT_EVENT_URL)
+                if slug_from_url:
+                    base_force_slug = slug_from_url
+
+            active_force_slug, step_eta = maybe_auto_step_force_slug(base_force_slug)
             slug_changed_this_loop = False
             if step_eta is not None:
                 print(f"⏱️ Next slug step in: {step_eta}s", flush=True)
