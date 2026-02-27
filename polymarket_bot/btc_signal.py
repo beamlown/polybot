@@ -61,7 +61,7 @@ def get_btc_signal_prob() -> tuple[float | None, str]:
         prob = 0.5 + max(-0.2, min(0.2, score * 80))
         prob = max(0.05, min(0.95, prob))
 
-        reason = f"btc_momentum 1m={mom_1m:.4%}, 5m={mom_5m:.4%}"
+        reason = f"btc_momentum 1m={mom_1m:.4%}, 5m={mom_5m:.4%}, model_up_prob={prob*100:.1f}%"
         return prob, reason
     except Exception as e:
         return None, f"btc_signal_error: {e}"
