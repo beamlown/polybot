@@ -66,6 +66,7 @@ AUTO_REENTER_AFTER_CASHOUT = os.getenv("AUTO_REENTER_AFTER_CASHOUT", "true").low
 DB_PATH = "trades.db"
 FORCE_SLUG_STATE_FILE = Path("force_slug_state.json")
 CASHOUT_ARCHIVE_DIR = Path("cashout_archive")
+EXPIRY_SPAM_STATE_FILE = Path("expiry_spam_state.json")
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -331,6 +332,22 @@ def _save_force_state(state: dict):
         pass
 
 
+def _load_expiry_spam_state() -> dict:
+    if EXPIRY_SPAM_STATE_FILE.exists():
+        try:
+            return json.loads(EXPIRY_SPAM_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_expiry_spam_state(state: dict):
+    try:
+        EXPIRY_SPAM_STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def maybe_auto_step_force_slug(current_slug: str) -> tuple[str, int | None]:
     if not AUTO_FORCE_SLUG_STEP or not current_slug:
         return current_slug, None
@@ -574,10 +591,15 @@ def main():
                         seconds_left = int((end_dt - datetime.now(UTC)).total_seconds())
                         if seconds_left <= MIN_SECONDS_TO_EXPIRY:
                             skip_near_expiry += 1
-                            print(
-                                f"Expiry gate | market={m.market_id} seconds_left={seconds_left} min_required>{MIN_SECONDS_TO_EXPIRY}",
-                                flush=True,
-                            )
+                            spam_state = _load_expiry_spam_state()
+                            spam_key = f"{active_force_slug}:{m.market_id}"
+                            if spam_state.get("last") != spam_key:
+                                print(
+                                    f"Expiry gate | market={m.market_id} seconds_left={seconds_left} min_required>{MIN_SECONDS_TO_EXPIRY}",
+                                    flush=True,
+                                )
+                                spam_state["last"] = spam_key
+                                _save_expiry_spam_state(spam_state)
 
                             # If forced slug is clearly stale, auto-jump to next slug immediately.
                             if (
@@ -596,6 +618,7 @@ def main():
                                     slug_advanced_on_expiry = True
                                     slug_changed_this_loop = True
                                     print(f"⏩ Expired round detected -> force slug advanced to {active_force_slug}", flush=True)
+                                    _save_expiry_spam_state({})
                                     # Stop processing stale rows immediately; next loop will re-scan with new slug.
                                     break
                             continue
