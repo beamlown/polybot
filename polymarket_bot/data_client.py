@@ -25,7 +25,8 @@ class MarketClient:
     def __init__(self):
         self.timeout = int(os.getenv("HTTP_TIMEOUT_SECONDS", "20"))
         self.limit = int(os.getenv("EVENT_LIMIT", "100"))
-        self.max_days_to_resolution = int(os.getenv("MAX_DAYS_TO_RESOLUTION", "7"))
+        self.max_days_to_resolution = float(os.getenv("MAX_DAYS_TO_RESOLUTION", "7"))
+        self.max_hours_to_resolution = float(os.getenv("MAX_HOURS_TO_RESOLUTION", "0"))
         self.require_started = os.getenv("REQUIRE_STARTED", "true").lower() == "true"
 
     def _fetch_events(self) -> list[dict]:
@@ -92,7 +93,10 @@ class MarketClient:
                         days_left = (end_dt - now).total_seconds() / 86400
                         if days_left < 0:
                             continue
-                        if days_left > self.max_days_to_resolution:
+                        max_days = self.max_days_to_resolution
+                        if self.max_hours_to_resolution > 0:
+                            max_days = self.max_hours_to_resolution / 24.0
+                        if days_left > max_days:
                             continue
                     except Exception:
                         pass
