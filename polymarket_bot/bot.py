@@ -114,6 +114,22 @@ def max_position_size(bankroll: float, price: float) -> float:
     return risk_dollars / price
 
 
+def unrealized_pnl(market_prices: dict[str, float]) -> float:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT market_id, price, size FROM trades WHERE side = 'BUY_YES'")
+    rows = cur.fetchall()
+    conn.close()
+
+    pnl = 0.0
+    for market_id, entry_price, size in rows:
+        current_price = market_prices.get(str(market_id))
+        if current_price is None:
+            continue
+        pnl += (float(current_price) - float(entry_price)) * float(size)
+    return pnl
+
+
 def main():
     init_db()
     client = MarketClient()
@@ -139,6 +155,7 @@ def main():
 
             markets = client.fetch_markets()
             print(f"Fetched {len(markets)} active markets", flush=True)
+            market_prices = {str(m.market_id): float(m.yes_price) for m in markets}
 
             for m in markets:
                 # Hard market-price filters to avoid tiny-price spam buys
@@ -165,6 +182,14 @@ def main():
                     note = f"edge={round(model_prob - m.yes_price, 4)}"
                     log_trade(m.market_id, m.question, "BUY_YES", m.yes_price, size, mode, note)
                     print(f"[{mode}] BUY_YES {m.market_id} @ {m.yes_price} size={size:.4f} {note}", flush=True)
+
+            trades_today = trades_count_today()
+            notional_today = today_trade_notional()
+            mtm = unrealized_pnl(market_prices)
+            print(
+                f"Status | trades_today={trades_today}/{MAX_TRADES_PER_DAY} | notional_today=${notional_today:.2f} | unrealized_pnl=${mtm:.2f}",
+                flush=True,
+            )
 
             time.sleep(LOOP_SECONDS)
 
