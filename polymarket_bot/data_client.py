@@ -31,6 +31,7 @@ class MarketClient:
         self.require_started = os.getenv("REQUIRE_STARTED", "true").lower() == "true"
         self.require_end_date = os.getenv("REQUIRE_END_DATE", "true").lower() == "true"
         self.force_event_slug = os.getenv("FORCE_EVENT_SLUG", "").strip()
+        self.auto_btc_5m = os.getenv("AUTO_BTC_5M", "true").lower() == "true"
 
     def _fetch_events(self) -> list[dict]:
         if self.force_event_slug:
@@ -51,7 +52,20 @@ class MarketClient:
         resp = requests.get(f"{BASE_URL}/events", params=params, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
-        return data if isinstance(data, list) else []
+        events = data if isinstance(data, list) else []
+
+        if self.auto_btc_5m:
+            filtered = []
+            for e in events:
+                slug = str(e.get("slug") or "").lower()
+                title = str(e.get("title") or "").lower()
+                text = f"{slug} {title}"
+                if "btc-updown-5m" in text or ("bitcoin" in text and "up or down" in text and "5" in text):
+                    filtered.append(e)
+            if filtered:
+                return filtered
+
+        return events
 
     @staticmethod
     def _parse_outcome_prices(raw_prices) -> list[float]:
