@@ -81,6 +81,19 @@ def today_trade_notional() -> float:
     return val
 
 
+def already_traded_today(market_id: str, side: str = "BUY_YES") -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    today = date.today().isoformat()
+    cur.execute(
+        "SELECT 1 FROM trades WHERE market_id = ? AND side = ? AND ts LIKE ? LIMIT 1",
+        (market_id, side, f"{today}%"),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+
 def max_position_size(bankroll: float, price: float) -> float:
     risk_dollars = bankroll * MAX_RISK_PER_TRADE_PCT
     if price <= 0:
@@ -100,15 +113,19 @@ def main():
             daily_cap = bankroll * MAX_DAILY_DRAWDOWN_PCT
             spent_today = today_trade_notional()
             if spent_today >= daily_cap:
-                print("Daily risk cap reached. Sleeping...")
+                print("Daily risk cap reached. Sleeping...", flush=True)
                 time.sleep(LOOP_SECONDS)
                 continue
 
             markets = client.fetch_markets()
+            print(f"Fetched {len(markets)} active markets", flush=True)
 
             for m in markets:
                 model_prob = fair_probability(m.signal_prob)
                 if should_buy_yes(m.yes_price, model_prob, MIN_EDGE):
+                    if already_traded_today(m.market_id, "BUY_YES"):
+                        continue
+
                     size = max_position_size(bankroll, m.yes_price)
                     if size <= 0:
                         continue
@@ -116,7 +133,7 @@ def main():
                     mode = "paper" if PAPER_MODE else "live"
                     note = f"edge={round(model_prob - m.yes_price, 4)}"
                     log_trade(m.market_id, m.question, "BUY_YES", m.yes_price, size, mode, note)
-                    print(f"[{mode}] BUY_YES {m.market_id} @ {m.yes_price} size={size:.4f} {note}")
+                    print(f"[{mode}] BUY_YES {m.market_id} @ {m.yes_price} size={size:.4f} {note}", flush=True)
 
             time.sleep(LOOP_SECONDS)
 
@@ -124,7 +141,7 @@ def main():
             print("Stopping bot.")
             break
         except Exception as e:
-            print(f"Loop error: {e}")
+            print(f"Loop error: {e}", flush=True)
             time.sleep(LOOP_SECONDS)
 
 
