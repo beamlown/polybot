@@ -316,6 +316,21 @@ def _step_slug(slug: str, step: int) -> str | None:
     return f"{base}{n + step}"
 
 
+def _seconds_left_from_slug(slug: str | None) -> int | None:
+    if not slug:
+        return None
+    m = re.search(r"-(\d+)$", str(slug))
+    if not m:
+        return None
+    try:
+        # btc-updown-5m-* slugs use epoch seconds at round start.
+        start_ts = int(m.group(1))
+        end_ts = start_ts + 300
+        return end_ts - int(time.time())
+    except Exception:
+        return None
+
+
 def _load_force_state(default_slug: str) -> dict:
     if FORCE_SLUG_STATE_FILE.exists():
         try:
@@ -584,46 +599,49 @@ def main():
                         skip_forced_market += 1
                         continue
 
-                # Skip stale/almost-finished rounds so we don't trade prior event windows
-                if m.end_date:
+                # Skip stale/almost-finished rounds so we don't trade prior event windows.
+                # Prefer slug-clock (more reliable for btc-updown-5m) over API end_date.
+                seconds_left = _seconds_left_from_slug(m.slug)
+                if seconds_left is None and m.end_date:
                     try:
                         end_dt = datetime.fromisoformat(str(m.end_date).replace("Z", "+00:00"))
                         seconds_left = int((end_dt - datetime.now(UTC)).total_seconds())
-                        if seconds_left <= MIN_SECONDS_TO_EXPIRY:
-                            skip_near_expiry += 1
-                            spam_state = _load_expiry_spam_state()
-                            spam_key = f"{active_force_slug}:{m.market_id}"
-                            if spam_state.get("last") != spam_key:
-                                print(
-                                    f"Expiry gate | market={m.market_id} seconds_left={seconds_left} min_required>{MIN_SECONDS_TO_EXPIRY}",
-                                    flush=True,
-                                )
-                                spam_state["last"] = spam_key
-                                _save_expiry_spam_state(spam_state)
-
-                            # If forced slug is clearly stale, auto-jump to next slug immediately.
-                            if (
-                                AUTO_FORCE_SLUG_STEP
-                                and active_force_slug
-                                and (seconds_left < -30)
-                                and not slug_advanced_on_expiry
-                            ):
-                                next_slug = _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
-                                if next_slug:
-                                    active_force_slug = next_slug.lower()
-                                    state = _load_force_state(active_force_slug)
-                                    state["slug"] = active_force_slug
-                                    state["last_step_ts"] = int(time.time())
-                                    _save_force_state(state)
-                                    slug_advanced_on_expiry = True
-                                    slug_changed_this_loop = True
-                                    print(f"⏩ Expired round detected -> force slug advanced to {active_force_slug}", flush=True)
-                                    _save_expiry_spam_state({})
-                                    # Stop processing stale rows immediately; next loop will re-scan with new slug.
-                                    break
-                            continue
                     except Exception:
-                        pass
+                        seconds_left = None
+
+                if seconds_left is not None and seconds_left <= MIN_SECONDS_TO_EXPIRY:
+                    skip_near_expiry += 1
+                    spam_state = _load_expiry_spam_state()
+                    spam_key = f"{active_force_slug}:{m.market_id}"
+                    if spam_state.get("last") != spam_key:
+                        print(
+                            f"Expiry gate | market={m.market_id} seconds_left={seconds_left} min_required>{MIN_SECONDS_TO_EXPIRY}",
+                            flush=True,
+                        )
+                        spam_state["last"] = spam_key
+                        _save_expiry_spam_state(spam_state)
+
+                    # If forced slug is clearly stale, auto-jump to next slug immediately.
+                    if (
+                        AUTO_FORCE_SLUG_STEP
+                        and active_force_slug
+                        and (seconds_left < -30)
+                        and not slug_advanced_on_expiry
+                    ):
+                        next_slug = _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
+                        if next_slug:
+                            active_force_slug = next_slug.lower()
+                            state = _load_force_state(active_force_slug)
+                            state["slug"] = active_force_slug
+                            state["last_step_ts"] = int(time.time())
+                            _save_force_state(state)
+                            slug_advanced_on_expiry = True
+                            slug_changed_this_loop = True
+                            print(f"⏩ Expired round detected -> force slug advanced to {active_force_slug}", flush=True)
+                            _save_expiry_spam_state({})
+                            # Stop processing stale rows immediately; next loop will re-scan with new slug.
+                            break
+                    continue
 
                 # Hard market-price filters to avoid tiny-price spam buys
                 if m.yes_price < MIN_PRICE or m.yes_price > MAX_PRICE:
