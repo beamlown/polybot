@@ -40,6 +40,7 @@ MIN_PRICE = _env_float("MIN_PRICE", 0.05)
 MAX_PRICE = _env_float("MAX_PRICE", 0.85)
 BTC_ONLY = os.getenv("BTC_ONLY", "true").lower() == "true"
 BTC_FOCUS_MODE = os.getenv("BTC_FOCUS_MODE", "ultrashort").lower()  # ultrashort|any
+FORCE_MARKET_IDS = {x.strip() for x in os.getenv("FORCE_MARKET_IDS", "").split(",") if x.strip()}
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
 
@@ -191,6 +192,7 @@ def main():
                 btc_prob, btc_reason = get_btc_signal_prob()
                 print(f"BTC signal: {btc_reason}", flush=True)
 
+            skip_forced_market = 0
             skip_non_btc = 0
             skip_signal_unavailable = 0
             skip_price = 0
@@ -198,6 +200,10 @@ def main():
             trades_placed_this_loop = 0
 
             for m in markets:
+                if FORCE_MARKET_IDS and str(m.market_id) not in FORCE_MARKET_IDS:
+                    skip_forced_market += 1
+                    continue
+
                 # Hard market-price filters to avoid tiny-price spam buys
                 if m.yes_price < MIN_PRICE or m.yes_price > MAX_PRICE:
                     skip_price += 1
@@ -257,7 +263,7 @@ def main():
                     print(f"[{mode}] {buy_side} {m.market_id} @ {entry_price} size={size:.4f} {note}", flush=True)
 
             print(
-                f"Loop debug | placed={trades_placed_this_loop} | skip_non_btc={skip_non_btc} | skip_signal={skip_signal_unavailable} | skip_price={skip_price} | skip_edge={skip_edge}",
+                f"Loop debug | placed={trades_placed_this_loop} | skip_forced={skip_forced_market} | skip_non_btc={skip_non_btc} | skip_signal={skip_signal_unavailable} | skip_price={skip_price} | skip_edge={skip_edge}",
                 flush=True,
             )
 

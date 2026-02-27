@@ -47,6 +47,7 @@ python clob_sdk_test.py
 - Set `REQUIRE_STARTED=true` to skip not-yet-started markets
 - Set `BTC_ONLY=true` to trade only BTC/Bitcoin markets with momentum signal
 - Set `BTC_FOCUS_MODE=ultrashort` to only allow BTC “up/down in 5 minutes” style markets (`any` allows all BTC markets)
+- Set `FORCE_MARKET_IDS=<id1,id2>` to trade only specific market IDs
 - Set `FORCE_EVENT_SLUG=<event-slug>` to force trading a specific event (bypasses time filters)
 
 ## Important
