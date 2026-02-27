@@ -6,7 +6,7 @@ _Learn about the person you're helping. Update this as you go._
 - **What to call them:** Jawn
 - **Pronouns:** _(optional)_
 - **Timezone:** America/Chicago
-- **Notes:** Music artist; wants help promoting songs.
+- **Notes:** Music artist; wants help promoting songs. Profiles: jawncold on Spotify/Apple Music/Instagram, sevencities on SoundCloud.
 
 ## Context
 
