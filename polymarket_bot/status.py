@@ -1,4 +1,3 @@
-import json
 import sqlite3
 from pathlib import Path
 
@@ -7,56 +6,66 @@ import requests
 DB = Path(__file__).parent / "trades.db"
 BASE_URL = "https://gamma-api.polymarket.com"
 
-GREEN = "\033[92m"
-RED = "\033[91m"
-YELLOW = "\033[93m"
-RESET = "\033[0m"
 
-
-def color_money(value: float) -> str:
+def money_emoji(value: float) -> str:
     if value > 0:
-        return f"{GREEN}${value:.2f}{RESET}"
+        return f"🟢 +${value:.2f}"
     if value < 0:
-        return f"{RED}-${abs(value):.2f}{RESET}"
-    return f"${value:.2f}"
+        return f"🔴 -${abs(value):.2f}"
+    return "$0.00"
 
 
-def fetch_market_prices(limit: int = 300) -> dict[str, float]:
+def pct_emoji(value: float) -> str:
+    if value > 0:
+        return f"🟢 +{value:.2f}%"
+    if value < 0:
+        return f"🔴 -{abs(value):.2f}%"
+    return "0.00%"
+
+
+def fetch_market_snapshot(market_id: str) -> dict:
+    """
+    Returns best-effort snapshot:
+    {
+      yes_price: float|None,
+      closed: bool|None,
+      mark_source: str
+    }
+    """
     try:
         resp = requests.get(
-            f"{BASE_URL}/events",
-            params={"closed": "false", "limit": limit},
-            timeout=20,
+            f"{BASE_URL}/markets",
+            params={"id": str(market_id)},
+            timeout=15,
         )
         resp.raise_for_status()
-        events = resp.json()
+        data = resp.json()
+        if not isinstance(data, list) or not data:
+            return {"yes_price": None, "closed": None, "mark_source": "missing"}
+
+        m = data[0]
+        raw_prices = m.get("outcomePrices")
+        yes_price = None
+        if isinstance(raw_prices, list) and raw_prices:
+            try:
+                yes_price = float(raw_prices[0])
+            except Exception:
+                yes_price = None
+        elif isinstance(raw_prices, str) and raw_prices:
+            # fallback if API returns stringified list
+            import json
+            try:
+                arr = json.loads(raw_prices)
+                if isinstance(arr, list) and arr:
+                    yes_price = float(arr[0])
+            except Exception:
+                yes_price = None
+
+        closed = m.get("closed")
+        source = "resolved" if closed else "live"
+        return {"yes_price": yes_price, "closed": closed, "mark_source": source}
     except Exception:
-        return {}
-
-    prices: dict[str, float] = {}
-    if not isinstance(events, list):
-        return prices
-
-    for event in events:
-        for market in event.get("markets", []) or []:
-            market_id = str(market.get("id") or market.get("conditionId") or market.get("slug") or "")
-            if not market_id:
-                continue
-
-            outcome_prices = market.get("outcomePrices")
-            if isinstance(outcome_prices, str):
-                try:
-                    outcome_prices = json.loads(outcome_prices)
-                except Exception:
-                    outcome_prices = []
-
-            if isinstance(outcome_prices, list) and outcome_prices:
-                try:
-                    prices[market_id] = float(outcome_prices[0])
-                except Exception:
-                    pass
-
-    return prices
+        return {"yes_price": None, "closed": None, "mark_source": "unavailable"}
 
 
 if not DB.exists():
@@ -83,8 +92,7 @@ cur.execute(
 recent_rows = cur.fetchall()
 conn.close()
 
-# Aggregate positions by market
-positions: dict[str, dict] = {}
+positions = {}
 for market_id, question, side, price, size in positions_raw:
     k = f"{market_id}:{side}"
     if k not in positions:
@@ -98,7 +106,6 @@ for market_id, question, side, price, size in positions_raw:
     positions[k]["qty"] += float(size)
     positions[k]["cost"] += float(price) * float(size)
 
-prices = fetch_market_prices()
 position_rows = []
 portfolio_pnl = 0.0
 
@@ -106,21 +113,26 @@ for _, p in positions.items():
     qty = p["qty"]
     cost = p["cost"]
     avg_entry = (cost / qty) if qty else 0.0
-    current_yes = prices.get(p["market_id"])
 
-    if current_yes is None:
+    snap = fetch_market_snapshot(p["market_id"])
+    yes_price = snap["yes_price"]
+    closed = snap["closed"]
+
+    if yes_price is None:
         pnl = 0.0
         pnl_pct = 0.0
         mark = "N/A"
+        status = "unknown"
     else:
         if p["side"] == "BUY_YES":
-            current = current_yes
+            current = yes_price
         else:
-            current = 1.0 - current_yes
+            current = 1.0 - yes_price
 
         pnl = (current - avg_entry) * qty
         pnl_pct = ((current - avg_entry) / avg_entry * 100.0) if avg_entry > 0 else 0.0
         mark = f"{current:.4f}"
+        status = "resolved" if closed else "live"
 
     portfolio_pnl += pnl
     position_rows.append(
@@ -133,6 +145,7 @@ for _, p in positions.items():
             "mark": mark,
             "pnl": pnl,
             "pnl_pct": pnl_pct,
+            "status": status,
         }
     )
 
@@ -143,7 +156,7 @@ print("POLYMARKET PAPER BOT STATUS")
 print("=" * 64)
 print(f"Total trades           : {total}")
 print(f"Total notional         : ${notional:.2f}")
-print(f"Portfolio unrealized   : {color_money(portfolio_pnl)}")
+print(f"Portfolio unrealized   : {money_emoji(portfolio_pnl)}")
 print("=" * 64)
 
 print("\nPOSITIONS (BEST -> WORST)")
@@ -152,15 +165,10 @@ if not position_rows:
     print("- No open paper positions yet.")
 else:
     for row in position_rows:
-        pnl_str = color_money(row["pnl"])
-        pct = f"{row['pnl_pct']:+.2f}%"
-        if row["pnl_pct"] > 0:
-            pct = f"{GREEN}{pct}{RESET}"
-        elif row["pnl_pct"] < 0:
-            pct = f"{RED}{pct}{RESET}"
-
-        print(f"{row['market_id']} [{row['side']}]  |  pnl={pnl_str} ({pct})")
-        print(f"  qty={row['qty']:.2f}  entry={row['avg_entry']:.4f}  mark={row['mark']}")
+        pnl_str = money_emoji(row["pnl"])
+        pct_str = pct_emoji(row["pnl_pct"])
+        print(f"{row['market_id']} [{row['side']}]  |  {pnl_str} ({pct_str})")
+        print(f"  qty={row['qty']:.2f}  entry={row['avg_entry']:.4f}  mark={row['mark']}  status={row['status']}")
         print(f"  {row['question']}")
         print()
 
