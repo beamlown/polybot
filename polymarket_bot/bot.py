@@ -229,6 +229,30 @@ def position_snapshot(market_prices: dict[str, float], limit: int = 3) -> list[t
     return out[:limit]
 
 
+def entry_snapshot(market_prices: dict[str, float], limit: int = 8) -> list[tuple[str, str, float, float, float]]:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, market_id, side, price, size FROM trades WHERE side IN ('BUY_YES','BUY_NO') ORDER BY id DESC"
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    out = []
+    for _, market_id, side, price, size in rows:
+        yes_now = market_prices.get(str(market_id))
+        if yes_now is None:
+            continue
+        entry = float(price)
+        qty = float(size)
+        curr = yes_now if side == "BUY_YES" else (1.0 - yes_now)
+        pnl = (curr - entry) * qty
+        out.append((str(market_id), side, entry, qty, pnl))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def maybe_auto_cashout(market_prices: dict[str, float]) -> tuple[bool, float]:
     notional = today_trade_notional()
     if notional <= 0:
@@ -389,6 +413,12 @@ def main():
                     print("📌 Top positions (best→worst):", flush=True)
                     for mid, side, p in top_positions:
                         print(f"   {mid} [{side}] {color_pnl(p)}", flush=True)
+
+                entries = entry_snapshot(market_prices, limit=8)
+                if entries:
+                    print("🧾 Entries (latest):", flush=True)
+                    for mid, side, entry, qty, pnl in entries:
+                        print(f"   {mid} [{side}] entry={entry:.4f} size={qty:.2f} pnl={color_pnl(pnl)}", flush=True)
                 print("-" * 72, flush=True)
 
                 time.sleep(LOOP_SECONDS)
@@ -598,6 +628,12 @@ def main():
                 print("📌 Top positions (best→worst):", flush=True)
                 for mid, side, p in top_positions:
                     print(f"   {mid} [{side}] {color_pnl(p)}", flush=True)
+
+            entries = entry_snapshot(market_prices, limit=8)
+            if entries:
+                print("🧾 Entries (latest):", flush=True)
+                for mid, side, entry, qty, pnl in entries:
+                    print(f"   {mid} [{side}] entry={entry:.4f} size={qty:.2f} pnl={color_pnl(pnl)}", flush=True)
 
             print("-" * 72, flush=True)
 
