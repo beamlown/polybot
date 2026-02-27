@@ -178,6 +178,22 @@ def is_ultrashort_btc_market(question_lower: str) -> bool:
     return five_min_hint and updown_hint
 
 
+def _infer_up_is_yes(outcomes: list[str] | None) -> bool:
+    if not outcomes or len(outcomes) < 2:
+        return True
+    o0 = str(outcomes[0]).lower()
+    o1 = str(outcomes[1]).lower()
+
+    def is_up(x: str) -> bool:
+        return ("up" in x) or ("higher" in x) or (x.strip() == "yes")
+
+    if is_up(o0):
+        return True
+    if is_up(o1):
+        return False
+    return True
+
+
 def _step_slug(slug: str, step: int) -> str | None:
     m = re.search(r"(.*-)(\d+)$", slug)
     if not m:
@@ -279,6 +295,28 @@ def main():
                     m_slug = (m.slug or "").lower()
                     if active_force_slug in m_slug:
                         forced_hits += 1
+
+                if forced_hits == 0 and AUTO_FORCE_SLUG_STEP:
+                    stepped = _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
+                    if stepped:
+                        stepped = stepped.lower()
+                        stepped_hits = 0
+                        for m in markets:
+                            m_slug = (m.slug or "").lower()
+                            if stepped in m_slug:
+                                stepped_hits += 1
+                        if stepped_hits > 0:
+                            active_force_slug = stepped
+                            state = _load_force_state(active_force_slug)
+                            state["slug"] = active_force_slug
+                            state["last_step_ts"] = int(time.time())
+                            _save_force_state(state)
+                            print(
+                                f"Force slug miss -> stepped +{FORCE_SLUG_STEP_SIZE} and matched: '{active_force_slug}'",
+                                flush=True,
+                            )
+                            forced_hits = stepped_hits
+
                 if forced_hits == 0:
                     print(
                         f"Force slug '{active_force_slug}' not present in fetched markets; falling back to BTC filters this loop.",
@@ -329,14 +367,19 @@ def main():
                 else:
                     model_prob = fair_probability(m.signal_prob)
 
+                up_is_yes = _infer_up_is_yes(m.outcomes)
+                market_up_price = m.yes_price if up_is_yes else (1.0 - m.yes_price)
+
                 buy_side = None
                 edge_val = 0.0
-                if should_buy_yes(m.yes_price, model_prob, MIN_EDGE):
-                    buy_side = "BUY_YES"
-                    edge_val = model_prob - m.yes_price
-                elif should_buy_no(m.yes_price, model_prob, MIN_EDGE):
-                    buy_side = "BUY_NO"
-                    edge_val = m.yes_price - model_prob
+                if should_buy_yes(market_up_price, model_prob, MIN_EDGE):
+                    # Bullish bet -> BUY_YES if outcome0 is Up, else BUY_NO
+                    buy_side = "BUY_YES" if up_is_yes else "BUY_NO"
+                    edge_val = model_prob - market_up_price
+                elif should_buy_no(market_up_price, model_prob, MIN_EDGE):
+                    # Bearish bet -> BUY_NO if outcome0 is Up, else BUY_YES
+                    buy_side = "BUY_NO" if up_is_yes else "BUY_YES"
+                    edge_val = market_up_price - model_prob
                 else:
                     skip_edge += 1
 
@@ -358,7 +401,9 @@ def main():
                         continue
 
                     mode = "paper" if PAPER_MODE else "live"
-                    note = f"edge={round(edge_val, 4)}"
+                    outcomes_txt = "/".join(m.outcomes) if m.outcomes else "n/a"
+                    map_txt = f"up_is_{'YES' if up_is_yes else 'NO'}"
+                    note = f"edge={round(edge_val, 4)} {map_txt} outcomes={outcomes_txt}"
                     log_trade(m.market_id, m.question, buy_side, entry_price, size, mode, note)
                     trades_placed_this_loop += 1
                     side_emoji = "🟢" if buy_side == "BUY_YES" else "🔴"
