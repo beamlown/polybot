@@ -226,7 +226,10 @@ def main():
     client = MarketClient()
     bankroll = STARTING_BANKROLL
 
-    print(f"Bot started | PAPER_MODE={PAPER_MODE} | bankroll={bankroll}", flush=True)
+    print("=" * 72, flush=True)
+    print("🚀 POLYMARKET PAPER BOT", flush=True)
+    print(f"Mode: {'PAPER' if PAPER_MODE else 'LIVE'} | Bankroll: ${bankroll:.2f}", flush=True)
+    print("=" * 72, flush=True)
 
     while True:
         try:
@@ -245,14 +248,14 @@ def main():
                 continue
 
             markets = client.fetch_markets()
-            print(f"Fetched {len(markets)} active markets", flush=True)
+            print(f"\n🧭 Scan | Active markets: {len(markets)}", flush=True)
             market_prices = {str(m.market_id): float(m.yes_price) for m in markets}
 
             btc_prob = None
             btc_reason = ""
             if BTC_ONLY:
                 btc_prob, btc_reason = get_btc_signal_prob()
-                print(f"BTC signal: {btc_reason}", flush=True)
+                print(f"₿ Signal | {btc_reason}", flush=True)
 
             active_force_slug = maybe_auto_step_force_slug(FORCE_MARKET_SLUG_CONTAINS)
             if AUTO_BTC_5M_CLOB_DISCOVERY and not active_force_slug:
@@ -349,10 +352,11 @@ def main():
                     note = f"edge={round(edge_val, 4)}"
                     log_trade(m.market_id, m.question, buy_side, entry_price, size, mode, note)
                     trades_placed_this_loop += 1
-                    print(f"[{mode}] {buy_side} {m.market_id} @ {entry_price} size={size:.4f} {note}", flush=True)
+                    side_emoji = "🟢" if buy_side == "BUY_YES" else "🔴"
+                    print(f"{side_emoji} Trade | {buy_side} | market={m.market_id} | entry={entry_price:.4f} | size={size:.4f} | {note}", flush=True)
 
             print(
-                f"Loop debug | placed={trades_placed_this_loop} | skip_forced={skip_forced_market} | skip_non_btc={skip_non_btc} | skip_signal={skip_signal_unavailable} | skip_price={skip_price} | skip_edge={skip_edge}",
+                f"🧪 Debug | placed={trades_placed_this_loop} | skip_forced={skip_forced_market} | skip_non_btc={skip_non_btc} | skip_signal={skip_signal_unavailable} | skip_price={skip_price} | skip_edge={skip_edge}",
                 flush=True,
             )
 
@@ -361,9 +365,10 @@ def main():
             mtm = unrealized_pnl(market_prices)
             pnl_colored = color_pnl(mtm)
             print(
-                f"Status | trades_today={trades_today}/{MAX_TRADES_PER_DAY} | notional_today=${notional_today:.2f} | unrealized_pnl={pnl_colored}",
+                f"📊 Status | trades: {trades_today}/{MAX_TRADES_PER_DAY} | notional: ${notional_today:.2f} | unrealized: {pnl_colored}",
                 flush=True,
             )
+            print("-" * 72, flush=True)
 
             time.sleep(LOOP_SECONDS)
 
