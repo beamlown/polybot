@@ -54,6 +54,7 @@ python clob_sdk_test.py
 - Clock stepping: `AUTO_FORCE_SLUG_STEP=true` with `FORCE_SLUG_STEP_SIZE=300` and `FORCE_SLUG_STEP_SECONDS=300`
 - Set `AUTO_BTC_5M=true` to auto-rotate into newest BTC 5m up/down events when slugs change
 - Set `AUTO_BTC_5M_CLOB_DISCOVERY=true` to discover current BTC 5m slug from CLOB when no force slug is set
+- Set `USE_CLOB_MARKETS=true` to source tradable markets directly from CLOB (recommended for fast 5m rounds)
 - Optional fallback: `ID_STEP_FALLBACK=true` with `ID_STEP_SIZE=300` to try next slug id step (validated before use)
 - Set `FORCE_EVENT_SLUG=<event-slug>` to force trading a specific event (bypasses time filters)
 

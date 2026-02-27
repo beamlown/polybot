@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 
 import requests
 
+try:
+    from py_clob_client.client import ClobClient
+except Exception:
+    ClobClient = None
+
 
 BASE_URL = "https://gamma-api.polymarket.com"
 
@@ -14,10 +19,11 @@ BASE_URL = "https://gamma-api.polymarket.com"
 class Market:
     market_id: str
     question: str
-    yes_price: float  # 0..1
+    yes_price: float  # 0..1 (outcome index 0)
     signal_prob: float  # simple placeholder estimate
     end_date: str | None = None
     slug: str | None = None
+    outcomes: list[str] | None = None
 
 
 class MarketClient:
@@ -32,6 +38,8 @@ class MarketClient:
         self.require_end_date = os.getenv("REQUIRE_END_DATE", "true").lower() == "true"
         self.force_event_slug = os.getenv("FORCE_EVENT_SLUG", "").strip()
         self.auto_btc_5m = os.getenv("AUTO_BTC_5M", "true").lower() == "true"
+        self.use_clob_markets = os.getenv("USE_CLOB_MARKETS", "true").lower() == "true"
+        self.clob_pages = int(os.getenv("CLOB_MARKET_PAGES", "6"))
 
     def _fetch_events(self) -> list[dict]:
         if self.force_event_slug:
@@ -93,7 +101,91 @@ class MarketClient:
         # Replace with your own model later.
         return min(0.99, max(0.01, yes_price + 0.06))
 
+    def _fetch_markets_clob(self) -> List[Market]:
+        if ClobClient is None:
+            return []
+
+        markets: List[Market] = []
+        now = datetime.now(timezone.utc)
+
+        try:
+            client = ClobClient("https://clob.polymarket.com", chain_id=137)
+            cursor = "MA=="
+
+            for _ in range(self.clob_pages):
+                payload = client.get_markets(next_cursor=cursor)
+                data = payload.get("data", []) if isinstance(payload, dict) else []
+
+                for m in data:
+                    if not m.get("active", True):
+                        continue
+                    if m.get("closed", False):
+                        continue
+
+                    slug = str(m.get("market_slug") or "")
+                    question = str(m.get("question") or "Unknown market")
+
+                    if self.force_event_slug and self.force_event_slug.lower() not in slug.lower():
+                        continue
+
+                    if self.auto_btc_5m:
+                        text = f"{slug.lower()} {question.lower()}"
+                        if "btc-updown-5m" not in text and not ("bitcoin" in text and "up or down" in text and "5" in text):
+                            continue
+
+                    end_date_raw = m.get("end_date_iso")
+                    if end_date_raw:
+                        try:
+                            end_dt = datetime.fromisoformat(str(end_date_raw).replace("Z", "+00:00"))
+                            days_left = (end_dt - now).total_seconds() / 86400
+                            if days_left < 0:
+                                continue
+                        except Exception:
+                            pass
+
+                    tokens = m.get("tokens") or []
+                    if not isinstance(tokens, list) or len(tokens) < 2:
+                        continue
+
+                    try:
+                        yes_price = float(tokens[0].get("price"))
+                    except Exception:
+                        continue
+
+                    if yes_price <= 0 or yes_price >= 1:
+                        continue
+
+                    outcomes = []
+                    for t in tokens[:2]:
+                        outcomes.append(str(t.get("outcome") or ""))
+
+                    market_id = str(m.get("condition_id") or m.get("question_id") or slug or "unknown")
+                    markets.append(
+                        Market(
+                            market_id=market_id,
+                            question=question,
+                            yes_price=yes_price,
+                            signal_prob=self._simple_signal_prob(yes_price),
+                            end_date=end_date_raw,
+                            slug=slug,
+                            outcomes=outcomes,
+                        )
+                    )
+
+                cursor = payload.get("next_cursor") if isinstance(payload, dict) else None
+                if not cursor:
+                    break
+        except Exception:
+            return []
+
+        return markets
+
     def fetch_markets(self) -> List[Market]:
+        if self.use_clob_markets:
+            clob_markets = self._fetch_markets_clob()
+            if clob_markets:
+                return clob_markets
+
         events = self._fetch_events()
         markets: List[Market] = []
 
@@ -165,6 +257,7 @@ class MarketClient:
                         signal_prob=self._simple_signal_prob(yes_price),
                         end_date=end_date_raw,
                         slug=m.get("slug") or event.get("slug"),
+                        outcomes=(m.get("outcomes") if isinstance(m.get("outcomes"), list) else None),
                     )
                 )
 
