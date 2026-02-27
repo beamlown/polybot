@@ -39,6 +39,8 @@ STARTING_BANKROLL = _env_float("STARTING_BANKROLL", 200.0)
 MAX_RISK_PER_TRADE_PCT = _env_float("MAX_RISK_PER_TRADE_PCT", 0.02)
 MAX_DAILY_DRAWDOWN_PCT = _env_float("MAX_DAILY_DRAWDOWN_PCT", 0.10)
 MAX_TRADES_PER_DAY = _env_int("MAX_TRADES_PER_DAY", 10)
+MAX_ENTRIES_PER_MARKET_PER_DAY = _env_int("MAX_ENTRIES_PER_MARKET_PER_DAY", 3)
+REENTRY_COOLDOWN_SECONDS = _env_int("REENTRY_COOLDOWN_SECONDS", 20)
 MIN_EDGE = _env_float("MIN_EDGE", 0.04)
 MIN_PRICE = _env_float("MIN_PRICE", 0.05)
 MAX_PRICE = _env_float("MAX_PRICE", 0.85)
@@ -111,17 +113,36 @@ def today_trade_notional() -> float:
     return val
 
 
-def already_traded_today(market_id: str, side: str = "BUY_YES") -> bool:
+def entries_for_market_side_today(market_id: str, side: str = "BUY_YES") -> int:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     today = date.today().isoformat()
     cur.execute(
-        "SELECT 1 FROM trades WHERE market_id = ? AND side = ? AND ts LIKE ? LIMIT 1",
+        "SELECT COUNT(*) FROM trades WHERE market_id = ? AND side = ? AND ts LIKE ?",
+        (market_id, side, f"{today}%"),
+    )
+    cnt = int(cur.fetchone()[0] or 0)
+    conn.close()
+    return cnt
+
+
+def cooldown_ready(market_id: str, side: str = "BUY_YES") -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    today = date.today().isoformat()
+    cur.execute(
+        "SELECT ts FROM trades WHERE market_id = ? AND side = ? AND ts LIKE ? ORDER BY id DESC LIMIT 1",
         (market_id, side, f"{today}%"),
     )
     row = cur.fetchone()
     conn.close()
-    return row is not None
+    if not row:
+        return True
+    try:
+        last_ts = datetime.fromisoformat(str(row[0]))
+        return (datetime.now(UTC) - last_ts).total_seconds() >= REENTRY_COOLDOWN_SECONDS
+    except Exception:
+        return True
 
 
 def trades_count_today() -> int:
@@ -410,7 +431,10 @@ def main():
                     skip_edge += 1
 
                 if buy_side:
-                    if already_traded_today(m.market_id, buy_side):
+                    entries_today_side = entries_for_market_side_today(m.market_id, buy_side)
+                    if entries_today_side >= MAX_ENTRIES_PER_MARKET_PER_DAY:
+                        continue
+                    if not cooldown_ready(m.market_id, buy_side):
                         continue
 
                     # Recheck caps before each order
