@@ -1,6 +1,9 @@
 import os
 import time
+import json
+import re
 import sqlite3
+from pathlib import Path
 from datetime import datetime, date, UTC
 
 try:
@@ -44,8 +47,12 @@ BTC_FOCUS_MODE = os.getenv("BTC_FOCUS_MODE", "ultrashort").lower()  # ultrashort
 FORCE_MARKET_IDS = {x.strip() for x in os.getenv("FORCE_MARKET_IDS", "").split(",") if x.strip()}
 FORCE_MARKET_SLUG_CONTAINS = os.getenv("FORCE_MARKET_SLUG_CONTAINS", "").strip().lower()
 AUTO_BTC_5M_CLOB_DISCOVERY = os.getenv("AUTO_BTC_5M_CLOB_DISCOVERY", "true").lower() == "true"
+AUTO_FORCE_SLUG_STEP = os.getenv("AUTO_FORCE_SLUG_STEP", "true").lower() == "true"
+FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
+FORCE_SLUG_STEP_SECONDS = _env_int("FORCE_SLUG_STEP_SECONDS", 300)
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
+FORCE_SLUG_STATE_FILE = Path("force_slug_state.json")
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -162,6 +169,58 @@ def is_ultrashort_btc_market(question_lower: str) -> bool:
     return five_min_hint and updown_hint
 
 
+def _step_slug(slug: str, step: int) -> str | None:
+    m = re.search(r"(.*-)(\d+)$", slug)
+    if not m:
+        return None
+    base, n = m.group(1), int(m.group(2))
+    return f"{base}{n + step}"
+
+
+def _load_force_state(default_slug: str) -> dict:
+    if FORCE_SLUG_STATE_FILE.exists():
+        try:
+            return json.loads(FORCE_SLUG_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"slug": default_slug, "last_step_ts": 0}
+
+
+def _save_force_state(state: dict):
+    try:
+        FORCE_SLUG_STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def maybe_auto_step_force_slug(current_slug: str) -> str:
+    if not AUTO_FORCE_SLUG_STEP or not current_slug:
+        return current_slug
+
+    state = _load_force_state(current_slug)
+    # If env slug changed manually, sync state immediately.
+    if state.get("slug") != current_slug:
+        state["slug"] = current_slug
+        state["last_step_ts"] = int(time.time())
+        _save_force_state(state)
+        return current_slug
+
+    now_ts = int(time.time())
+    last_ts = int(state.get("last_step_ts", 0))
+    if now_ts - last_ts < FORCE_SLUG_STEP_SECONDS:
+        return current_slug
+
+    next_slug = _step_slug(current_slug, FORCE_SLUG_STEP_SIZE)
+    if next_slug:
+        state["slug"] = next_slug
+        state["last_step_ts"] = now_ts
+        _save_force_state(state)
+        print(f"Clock step: force slug -> {next_slug}", flush=True)
+        return next_slug
+
+    return current_slug
+
+
 def main():
     init_db()
     client = MarketClient()
@@ -195,12 +254,25 @@ def main():
                 btc_prob, btc_reason = get_btc_signal_prob()
                 print(f"BTC signal: {btc_reason}", flush=True)
 
-            active_force_slug = FORCE_MARKET_SLUG_CONTAINS
+            active_force_slug = maybe_auto_step_force_slug(FORCE_MARKET_SLUG_CONTAINS)
             if AUTO_BTC_5M_CLOB_DISCOVERY and not active_force_slug:
                 discovered_slug, reason = discover_latest_btc_5m_slug()
                 if discovered_slug:
                     active_force_slug = discovered_slug.lower()
                 print(f"CLOB discovery: {reason} slug={discovered_slug}", flush=True)
+
+            if active_force_slug:
+                forced_hits = 0
+                for m in markets:
+                    m_slug = (m.slug or "").lower()
+                    if active_force_slug in m_slug:
+                        forced_hits += 1
+                if forced_hits == 0:
+                    print(
+                        f"Force slug '{active_force_slug}' not present in fetched markets; falling back to BTC filters this loop.",
+                        flush=True,
+                    )
+                    active_force_slug = ""
 
             skip_forced_market = 0
             skip_non_btc = 0

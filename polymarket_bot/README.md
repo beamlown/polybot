@@ -49,6 +49,7 @@ python clob_sdk_test.py
 - Set `BTC_FOCUS_MODE=ultrashort` to only allow BTC “up/down in 5 minutes” style markets (`any` allows all BTC markets)
 - Set `FORCE_MARKET_IDS=<id1,id2>` to trade only specific market IDs
 - Or set `FORCE_MARKET_SLUG_CONTAINS=<slug-text>` to lock by URL slug text
+- Clock stepping: `AUTO_FORCE_SLUG_STEP=true` with `FORCE_SLUG_STEP_SIZE=300` and `FORCE_SLUG_STEP_SECONDS=300`
 - Set `AUTO_BTC_5M=true` to auto-rotate into newest BTC 5m up/down events when slugs change
 - Set `AUTO_BTC_5M_CLOB_DISCOVERY=true` to discover current BTC 5m slug from CLOB when no force slug is set
 - Optional fallback: `ID_STEP_FALLBACK=true` with `ID_STEP_SIZE=300` to try next slug id step (validated before use)
