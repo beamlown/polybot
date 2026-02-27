@@ -33,7 +33,10 @@ PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() == "true"
 STARTING_BANKROLL = _env_float("STARTING_BANKROLL", 200.0)
 MAX_RISK_PER_TRADE_PCT = _env_float("MAX_RISK_PER_TRADE_PCT", 0.02)
 MAX_DAILY_DRAWDOWN_PCT = _env_float("MAX_DAILY_DRAWDOWN_PCT", 0.10)
+MAX_TRADES_PER_DAY = _env_int("MAX_TRADES_PER_DAY", 10)
 MIN_EDGE = _env_float("MIN_EDGE", 0.04)
+MIN_PRICE = _env_float("MIN_PRICE", 0.05)
+MAX_PRICE = _env_float("MAX_PRICE", 0.85)
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
 
@@ -94,6 +97,16 @@ def already_traded_today(market_id: str, side: str = "BUY_YES") -> bool:
     return row is not None
 
 
+def trades_count_today() -> int:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    today = date.today().isoformat()
+    cur.execute("SELECT COUNT(*) FROM trades WHERE ts LIKE ?", (f"{today}%",))
+    val = int(cur.fetchone()[0] or 0)
+    conn.close()
+    return val
+
+
 def max_position_size(bankroll: float, price: float) -> float:
     risk_dollars = bankroll * MAX_RISK_PER_TRADE_PCT
     if price <= 0:
@@ -112,8 +125,15 @@ def main():
         try:
             daily_cap = bankroll * MAX_DAILY_DRAWDOWN_PCT
             spent_today = today_trade_notional()
+            trade_count = trades_count_today()
+
             if spent_today >= daily_cap:
                 print("Daily risk cap reached. Sleeping...", flush=True)
+                time.sleep(LOOP_SECONDS)
+                continue
+
+            if trade_count >= MAX_TRADES_PER_DAY:
+                print("Daily trade-count cap reached. Sleeping...", flush=True)
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -121,10 +141,21 @@ def main():
             print(f"Fetched {len(markets)} active markets", flush=True)
 
             for m in markets:
+                # Hard market-price filters to avoid tiny-price spam buys
+                if m.yes_price < MIN_PRICE or m.yes_price > MAX_PRICE:
+                    continue
+
                 model_prob = fair_probability(m.signal_prob)
                 if should_buy_yes(m.yes_price, model_prob, MIN_EDGE):
                     if already_traded_today(m.market_id, "BUY_YES"):
                         continue
+
+                    # Recheck caps before each order
+                    spent_today = today_trade_notional()
+                    trade_count = trades_count_today()
+                    if spent_today >= daily_cap or trade_count >= MAX_TRADES_PER_DAY:
+                        print("In-loop cap reached. Stopping new trades this cycle.", flush=True)
+                        break
 
                     size = max_position_size(bankroll, m.yes_price)
                     if size <= 0:

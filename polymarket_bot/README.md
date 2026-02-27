@@ -41,6 +41,7 @@ python clob_sdk_test.py
 - `start_bot.bat` → run bot
 - `reset_and_run.bat` → clear `trades.db` + run bot
 - `status.bat` → show recent paper trades summary
+- `live_monitor.bat` → auto-refresh status every 10 seconds
 
 ## Important
 - Starts in `PAPER_MODE=true`.
