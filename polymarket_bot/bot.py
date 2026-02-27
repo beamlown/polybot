@@ -302,14 +302,20 @@ def main():
                         forced_hits += 1
 
                 if forced_hits == 0 and AUTO_FORCE_SLUG_STEP:
-                    stepped = _step_slug(active_force_slug, FORCE_SLUG_STEP_SIZE)
-                    if stepped:
+                    max_hops = 12
+                    candidate = active_force_slug
+                    for hop in range(1, max_hops + 1):
+                        stepped = _step_slug(candidate, FORCE_SLUG_STEP_SIZE)
+                        if not stepped:
+                            break
                         stepped = stepped.lower()
+
                         stepped_hits = 0
                         for m in markets:
                             m_slug = (m.slug or "").lower()
                             if stepped in m_slug:
                                 stepped_hits += 1
+
                         if stepped_hits > 0:
                             active_force_slug = stepped
                             state = _load_force_state(active_force_slug)
@@ -317,10 +323,13 @@ def main():
                             state["last_step_ts"] = int(time.time())
                             _save_force_state(state)
                             print(
-                                f"Force slug miss -> stepped +{FORCE_SLUG_STEP_SIZE} and matched: '{active_force_slug}'",
+                                f"Force slug miss -> hopped +{FORCE_SLUG_STEP_SIZE} x{hop} and matched: '{active_force_slug}'",
                                 flush=True,
                             )
                             forced_hits = stepped_hits
+                            break
+
+                        candidate = stepped
 
                 if forced_hits == 0:
                     print(
