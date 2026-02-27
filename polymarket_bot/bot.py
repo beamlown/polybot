@@ -39,6 +39,7 @@ MIN_EDGE = _env_float("MIN_EDGE", 0.04)
 MIN_PRICE = _env_float("MIN_PRICE", 0.05)
 MAX_PRICE = _env_float("MAX_PRICE", 0.85)
 BTC_ONLY = os.getenv("BTC_ONLY", "true").lower() == "true"
+BTC_FOCUS_MODE = os.getenv("BTC_FOCUS_MODE", "ultrashort").lower()  # ultrashort|any
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 DB_PATH = "trades.db"
 
@@ -151,6 +152,12 @@ def unrealized_pnl(market_prices: dict[str, float]) -> float:
     return pnl
 
 
+def is_ultrashort_btc_market(question_lower: str) -> bool:
+    five_min_hint = ("5m" in question_lower) or ("5 min" in question_lower) or ("5-minute" in question_lower) or ("5 minute" in question_lower)
+    updown_hint = ("up or down" in question_lower) or ("higher or lower" in question_lower)
+    return five_min_hint and updown_hint
+
+
 def main():
     init_db()
     client = MarketClient()
@@ -200,6 +207,10 @@ def main():
                 is_btc_market = ("btc" in q_lower) or ("bitcoin" in q_lower)
 
                 if BTC_ONLY and not is_btc_market:
+                    skip_non_btc += 1
+                    continue
+
+                if BTC_ONLY and BTC_FOCUS_MODE == "ultrashort" and not is_ultrashort_btc_market(q_lower):
                     skip_non_btc += 1
                     continue
 
