@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime, date, UTC
 
+import requests
+
 try:
     from dotenv import load_dotenv
 except ImportError:
@@ -348,8 +350,23 @@ def _align_slug_to_current_round(slug: str | None) -> str | None:
 def _slug_from_event_url(url: str | None) -> str | None:
     if not url:
         return None
+
+    # 1) direct parse from provided URL
     m = re.search(r"/event/(btc-updown-5m-\d+)", str(url).lower())
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+
+    # 2) resolve/refresh URL (handles redirects to current round)
+    try:
+        r = requests.get(url, timeout=8, allow_redirects=True)
+        final_url = str(r.url).lower()
+        m2 = re.search(r"/event/(btc-updown-5m-\d+)", final_url)
+        if m2:
+            return m2.group(1)
+    except Exception:
+        pass
+
+    return None
 
 
 def _load_force_state(default_slug: str) -> dict:
