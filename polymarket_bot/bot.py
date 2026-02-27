@@ -61,6 +61,8 @@ AUTO_FORCE_SLUG_STEP = os.getenv("AUTO_FORCE_SLUG_STEP", "true").lower() == "tru
 ALIGN_STEP_TO_CLOCK = os.getenv("ALIGN_STEP_TO_CLOCK", "true").lower() == "true"
 AUTO_SLUG_FROM_URL = os.getenv("AUTO_SLUG_FROM_URL", "true").lower() == "true"
 CURRENT_EVENT_URL = os.getenv("CURRENT_EVENT_URL", "").strip()
+STEP_ON_MISS = os.getenv("STEP_ON_MISS", "true").lower() == "true"
+MAX_HOPS_ON_MISS = _env_int("MAX_HOPS_ON_MISS", 2)
 FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
 FORCE_SLUG_STEP_SECONDS = _env_int("FORCE_SLUG_STEP_SECONDS", 300)
 MIN_SECONDS_TO_EXPIRY = _env_int("MIN_SECONDS_TO_EXPIRY", 20)
@@ -586,8 +588,22 @@ def main():
                 if forced_hits == 0:
                     # On miss, do NOT keep hopping ahead; hold current target slug and wait.
                     if forced_hits == 0:
+                        if STEP_ON_MISS and AUTO_FORCE_SLUG_STEP and active_force_slug:
+                            candidate = active_force_slug
+                            for hop in range(1, max(1, MAX_HOPS_ON_MISS) + 1):
+                                stepped = _step_slug(candidate, FORCE_SLUG_STEP_SIZE)
+                                if not stepped:
+                                    break
+                                candidate = stepped.lower()
+                                print(f"Force slug miss -> advanced +{FORCE_SLUG_STEP_SIZE} x{hop} to '{candidate}'", flush=True)
+                            active_force_slug = candidate
+                            state = _load_force_state(active_force_slug)
+                            state["slug"] = active_force_slug
+                            state["last_step_ts"] = int(time.time())
+                            _save_force_state(state)
+
                         print(
-                            f"Force slug '{active_force_slug}' not present in fetched markets; holding this slug and waiting (no fallback trades).",
+                            f"Force slug '{active_force_slug}' not present in fetched markets; waiting for correct round (no fallback trades).",
                             flush=True,
                         )
                         print("-" * 72, flush=True)
