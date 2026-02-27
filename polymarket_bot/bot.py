@@ -50,6 +50,7 @@ FORCE_MARKET_IDS = {x.strip() for x in os.getenv("FORCE_MARKET_IDS", "").split("
 FORCE_MARKET_SLUG_CONTAINS = os.getenv("FORCE_MARKET_SLUG_CONTAINS", "").strip().lower()
 AUTO_BTC_5M_CLOB_DISCOVERY = os.getenv("AUTO_BTC_5M_CLOB_DISCOVERY", "true").lower() == "true"
 AUTO_FORCE_SLUG_STEP = os.getenv("AUTO_FORCE_SLUG_STEP", "true").lower() == "true"
+ALIGN_STEP_TO_CLOCK = os.getenv("ALIGN_STEP_TO_CLOCK", "true").lower() == "true"
 FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
 FORCE_SLUG_STEP_SECONDS = _env_int("FORCE_SLUG_STEP_SECONDS", 300)
 MIN_SECONDS_TO_EXPIRY = _env_int("MIN_SECONDS_TO_EXPIRY", 20)
@@ -260,7 +261,7 @@ def _load_force_state(default_slug: str) -> dict:
             return json.loads(FORCE_SLUG_STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return {"slug": default_slug, "last_step_ts": 0}
+    return {"slug": default_slug, "last_step_ts": 0, "last_clock_bucket": -1}
 
 
 def _save_force_state(state: dict):
@@ -275,14 +276,40 @@ def maybe_auto_step_force_slug(current_slug: str) -> tuple[str, int | None]:
         return current_slug, None
 
     state = _load_force_state(current_slug)
+    now_ts = int(time.time())
+
     # If env slug changed manually, sync state immediately.
     if state.get("slug") != current_slug:
         state["slug"] = current_slug
-        state["last_step_ts"] = int(time.time())
+        state["last_step_ts"] = now_ts
+        state["last_clock_bucket"] = now_ts // max(1, FORCE_SLUG_STEP_SECONDS)
         _save_force_state(state)
-        return current_slug, FORCE_SLUG_STEP_SECONDS
 
-    now_ts = int(time.time())
+    if ALIGN_STEP_TO_CLOCK:
+        interval = max(1, FORCE_SLUG_STEP_SECONDS)
+        current_bucket = now_ts // interval
+        last_bucket = int(state.get("last_clock_bucket", -1))
+
+        # Step once per new wall-clock bucket
+        if last_bucket >= 0 and current_bucket > last_bucket:
+            next_slug = _step_slug(current_slug, FORCE_SLUG_STEP_SIZE)
+            if next_slug:
+                state["slug"] = next_slug
+                state["last_step_ts"] = now_ts
+                state["last_clock_bucket"] = current_bucket
+                _save_force_state(state)
+                print(f"Clock-aligned step: force slug -> {next_slug}", flush=True)
+                # time until next boundary
+                eta = interval - (now_ts % interval)
+                return next_slug, eta
+
+        # no step yet: show ETA to boundary
+        eta = interval - (now_ts % interval)
+        state["last_clock_bucket"] = current_bucket
+        _save_force_state(state)
+        return current_slug, eta
+
+    # Legacy elapsed-timer stepping
     last_ts = int(state.get("last_step_ts", 0))
     elapsed = now_ts - last_ts
     if elapsed < FORCE_SLUG_STEP_SECONDS:
