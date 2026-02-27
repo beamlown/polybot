@@ -224,7 +224,7 @@ def main():
                     skip_non_btc += 1
                     continue
 
-                if BTC_ONLY and BTC_FOCUS_MODE == "ultrashort" and not is_ultrashort_btc_market(q_lower):
+                if BTC_ONLY and BTC_FOCUS_MODE == "ultrashort" and not FORCE_MARKET_SLUG_CONTAINS and not is_ultrashort_btc_market(q_lower):
                     skip_non_btc += 1
                     continue
 
