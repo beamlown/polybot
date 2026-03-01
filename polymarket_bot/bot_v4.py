@@ -168,6 +168,43 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
     return closed
 
 
+def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None) -> int:
+    if eta_seconds is None or eta_seconds > 0:
+        return 0
+
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    rows = c.execute(
+        """
+        SELECT id, side, entry, size
+        FROM trades
+        WHERE slug = ? AND closed_ts IS NULL
+        ORDER BY id ASC
+        """,
+        (slug,),
+    ).fetchall()
+
+    closed = 0
+    now_iso = datetime.now(UTC).isoformat()
+    for tid, side, entry, size in rows:
+        entry = float(entry)
+        size = float(size)
+        close_price = sell_yes_px if side == "BUY_YES" else sell_no_px
+        if close_price is None:
+            continue
+        pnl = (float(close_price) - entry) * size
+        c.execute(
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+            (now_iso, float(close_price), "round_expired_auto_close", float(pnl), int(tid)),
+        )
+        closed += 1
+        print(f"AUTO-SELL(EXPIRY) id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f}")
+
+    conn.commit()
+    conn.close()
+    return closed
+
+
 def main():
     if ROUND_MINUTES <= 0:
         die(E_CONFIG, "ROUND_MINUTES must be > 0")
@@ -243,6 +280,8 @@ def main():
             sell_yes_px = yes_best_bid if yes_best_bid is not None else market.yes_price
             sell_no_px = (1.0 - yes_best_ask) if yes_best_ask is not None else market.no_price
 
+            eta_now = seconds_to_next(market.slug, market.end_ts)
+            maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px)
             maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px)
 
             print(
@@ -251,7 +290,7 @@ def main():
 
             round_count = entries_this_round(market.slug)
             if round_count >= MAX_ENTRIES_PER_ROUND:
-                eta = seconds_to_next(market.slug, market.end_ts)
+                eta = eta_now
                 eta_safe = max(0, eta) if eta is not None else None
                 eta_txt = f" | next in {eta_safe}s" if eta_safe is not None else ""
                 print(f"Round: {market.slug} | No trade | round cap {round_count}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
