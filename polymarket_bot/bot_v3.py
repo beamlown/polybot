@@ -76,6 +76,15 @@ def log_trade(slug: str, market_id: str, side: str, entry: float, size: float, e
     conn.close()
 
 
+def _seconds_to_next_round(slug: str, round_minutes: int) -> int | None:
+    try:
+        start_ts = int(str(slug).rsplit("-", 1)[-1])
+        end_ts = start_ts + (round_minutes * 60)
+        return end_ts - int(datetime.now(UTC).timestamp())
+    except Exception:
+        return None
+
+
 def main():
     init_db()
     ob = OrderBookReader()
@@ -101,7 +110,9 @@ def main():
 
             round_entries = entries_this_slug(m.slug)
             if round_entries >= MAX_ENTRIES_PER_ROUND:
-                print(f"Round: {m.slug} | No trade | round cap {round_entries}/{MAX_ENTRIES_PER_ROUND}")
+                eta = _seconds_to_next_round(m.slug, ROUND_MINUTES)
+                eta_txt = f" | next round in {eta}s" if eta is not None else ""
+                print(f"Round: {m.slug} | No trade | round cap {round_entries}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
