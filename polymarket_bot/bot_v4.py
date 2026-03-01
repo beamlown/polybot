@@ -127,7 +127,7 @@ def main():
     while True:
         try:
             day_count = trades_today()
-            if day_count >= MAX_TRADES_PER_DAY:
+            if MAX_TRADES_PER_DAY > 0 and day_count >= MAX_TRADES_PER_DAY:
                 print(f"No trade | daily cap {day_count}/{MAX_TRADES_PER_DAY}")
                 time.sleep(LOOP_SECONDS)
                 continue
