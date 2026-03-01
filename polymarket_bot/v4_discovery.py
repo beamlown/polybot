@@ -121,14 +121,6 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             if sfx <= 0:
                 continue
 
-            # hard freshness gate around current clock
-            now = int(time.time())
-            interval = max(60, round_minutes * 60)
-            cur_bucket = (now // interval) * interval
-            if not force:
-                if abs(sfx - cur_bucket) > (interval * 2):
-                    continue
-
             best_bid = None
             best_ask = None
             gamma_spread = None
@@ -175,5 +167,13 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
         )
         return None, fmt(E_DISCOVERY_NONE, detail)
 
-    out.sort(key=lambda x: x.suffix, reverse=True)
+    if force:
+        out.sort(key=lambda x: x.suffix, reverse=True)
+        return out[0], None
+
+    # Prefer round closest to current time bucket for fast 5m products.
+    now = int(time.time())
+    interval = max(60, round_minutes * 60)
+    cur_bucket = (now // interval) * interval
+    out.sort(key=lambda x: (abs(x.suffix - cur_bucket), -x.suffix))
     return out[0], None
