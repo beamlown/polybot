@@ -18,7 +18,8 @@ SERIES_PREFIX = os.getenv("SERIES_PREFIX", "btc-updown")
 SERIES_PREFIXES = [x.strip() for x in os.getenv("SERIES_PREFIXES", SERIES_PREFIX).split(",") if x.strip()]
 ROUND_MINUTES = int(os.getenv("ROUND_MINUTES", "5"))
 MAX_CONCURRENT_TRADES = int(os.getenv("MAX_CONCURRENT_TRADES", "2"))
-MIN_TOP_BOOK_USD = float(os.getenv("MIN_TOP_BOOK_USD", "50"))
+MIN_TOP_BOOK_USD = float(os.getenv("MIN_TOP_BOOK_USD", "15"))
+TOP_BOOK_STRONG_USD = float(os.getenv("TOP_BOOK_STRONG_USD", "50"))
 MIN_VOLUME24H = float(os.getenv("MIN_VOLUME24H", "5000"))
 FORCE_SLUG = os.getenv("V4_FORCE_SLUG", "").strip()
 AUTO_ROLL_FORCE_SLUG = os.getenv("AUTO_ROLL_FORCE_SLUG", "true").strip().lower() in ("1", "true", "yes", "on")
@@ -364,11 +365,19 @@ def recent_side_realized_pnl(side: str, lookback: int) -> float:
     return float(sum(float(r[0] or 0) for r in rows))
 
 
-def candidate_score(spread: float | None, depth: float, imbalance: float, in_band: bool) -> float:
+def candidate_score(spread: float | None, depth: float, imbalance: float, in_band: bool, top_bid_usd: float, top_ask_usd: float) -> float:
     s = spread if (spread is not None and spread > 0) else 0.03
     score = (depth / max(s, 1e-6)) - (50.0 * abs(imbalance))
     if in_band:
         score += 500.0
+
+    # Soft top-of-book bonus (preference only, not hard gate)
+    weak_ok = (top_bid_usd >= MIN_TOP_BOOK_USD and top_ask_usd >= MIN_TOP_BOOK_USD)
+    strong_ok = (top_bid_usd >= TOP_BOOK_STRONG_USD and top_ask_usd >= TOP_BOOK_STRONG_USD)
+    if weak_ok:
+        score += 250.0
+    if strong_ok:
+        score += 250.0
     return score
 
 
@@ -742,8 +751,6 @@ def main():
 
                 gate_ok = (
                     (spread is not None and spread <= MAX_SPREAD)
-                    and top_bid_usd >= MIN_TOP_BOOK_USD
-                    and top_ask_usd >= MIN_TOP_BOOK_USD
                     and depth >= MIN_DEPTH_TOP5
                     and vol_ok
                 )
@@ -751,23 +758,24 @@ def main():
                 if not gate_ok:
                     if spread is None or spread > MAX_SPREAD:
                         fail_reason = "spread"
-                    elif top_bid_usd < MIN_TOP_BOOK_USD or top_ask_usd < MIN_TOP_BOOK_USD:
-                        fail_reason = "top_book_usd"
                     elif depth < MIN_DEPTH_TOP5:
                         fail_reason = "depth"
                     elif not vol_ok:
                         fail_reason = "volume24h"
 
+                weak_top = (top_bid_usd >= MIN_TOP_BOOK_USD and top_ask_usd >= MIN_TOP_BOOK_USD)
+                strong_top = (top_bid_usd >= TOP_BOOK_STRONG_USD and top_ask_usd >= TOP_BOOK_STRONG_USD)
                 print(
                     f"CANDIDATE | prefix={pref} slug={market.slug} suffix={market.suffix} market_id={market.market_id} "
-                    f"bid={yes_bid} ask={yes_ask} spread={spread} depth={depth:.1f} vol24h={market.volume24h} gate={gate_ok} reason={fail_reason or 'ok'}"
+                    f"bid={yes_bid} ask={yes_ask} spread={spread} depth={depth:.1f} top_bid_usd={top_bid_usd:.1f} top_ask_usd={top_ask_usd:.1f} "
+                    f"top_bonus={'strong' if strong_top else ('weak' if weak_top else 'none')} vol24h={market.volume24h} gate={gate_ok} reason={fail_reason or 'ok'}"
                 )
 
                 if gate_ok:
                     in_band = (BUY_YES_MIN_ENTRY <= (yes_ask or market.yes_price) < BUY_YES_MAX_ENTRY) or (
                         BUY_NO_MIN_ENTRY <= (1.0 - (yes_bid or market.yes_price)) < BUY_NO_MAX_ENTRY
                     )
-                    score = candidate_score(spread, depth, book.imbalance, in_band)
+                    score = candidate_score(spread, depth, book.imbalance, in_band, top_bid_usd, top_ask_usd)
                     candidates.append((score, pref, market, book))
 
             if not candidates:
