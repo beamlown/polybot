@@ -138,6 +138,21 @@ def _advance_slug_once(slug: str) -> str:
         return slug
 
 
+def realized_net_pnl() -> float:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
+    if "realized_pnl" not in cols:
+        conn.close()
+        return 0.0
+    val = c.execute("SELECT COALESCE(SUM(realized_pnl), 0.0) FROM trades").fetchone()[0]
+    conn.close()
+    try:
+        return float(val)
+    except Exception:
+        return 0.0
+
+
 def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
     if AUTO_TAKE_PROFIT_PCT <= 0:
         return 0
@@ -174,7 +189,8 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
             (now_iso, float(close_price), "auto_take_profit", float(pnl), int(tid)),
         )
         closed += 1
-        print(f"AUTO-SELL id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f}")
+        net = realized_net_pnl() + pnl
+        print(f"ALERT TAKE_PROFIT | id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
 
     conn.commit()
     conn.close()
@@ -313,7 +329,8 @@ def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float
             (now_iso, float(close_price), "auto_stop_loss", float(pnl), int(tid)),
         )
         closed += 1
-        print(f"AUTO-SELL(STOP) id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f}")
+        net = realized_net_pnl() + pnl
+        print(f"ALERT STOP_LOSS | id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
 
     conn.commit()
     conn.close()
@@ -350,7 +367,8 @@ def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_
             (now_iso, float(close_price), "round_expired_auto_close", float(pnl), int(tid)),
         )
         closed += 1
-        print(f"AUTO-SELL(EXPIRY) id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f}")
+        net = realized_net_pnl() + pnl
+        print(f"ALERT ROUND_EXPIRY_CLOSE | id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
 
     conn.commit()
     conn.close()
@@ -393,7 +411,8 @@ def maybe_close_any_expired_open_positions() -> int:
             (datetime.now(UTC).isoformat(), float(close_price), "expired_sweep_auto_close", float(pnl), int(tid)),
         )
         closed += 1
-        print(f"AUTO-SELL(SWEEP) id={tid} slug={slug} side={side} close={float(close_price):.4f} pnl={pnl:+.2f}")
+        net = realized_net_pnl() + pnl
+        print(f"ALERT EXPIRED_SWEEP_CLOSE | id={tid} slug={slug} side={side} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
 
     conn.commit()
     conn.close()
@@ -441,7 +460,8 @@ def maybe_auto_close_stale_positions() -> int:
             (now.isoformat(), float(close_price), "max_hold_auto_close", float(pnl), int(tid)),
         )
         closed += 1
-        print(f"AUTO-SELL(TIMEOUT) id={tid} age={int(age)}s side={side} entry={float(entry):.4f} close={float(close_price):.4f} pnl={pnl:+.2f}")
+        net = realized_net_pnl() + pnl
+        print(f"ALERT MAX_HOLD_TIMEOUT | id={tid} age={int(age)}s side={side} entry={float(entry):.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
 
     conn.commit()
     conn.close()
