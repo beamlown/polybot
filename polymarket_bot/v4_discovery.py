@@ -60,14 +60,14 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             r.raise_for_status()
             data = r.json()
         else:
-            # Notebook-style discovery: active/open markets sorted by volume.
+            # For fast 5m rounds, recency is more reliable than top-volume slices.
             r = requests.get(
                 f"{GAMMA_API}/markets",
                 params={
-                    "limit": 600,
+                    "limit": 2000,
                     "active": "true",
                     "closed": "false",
-                    "order": "volume24hr",
+                    "order": "startDate",
                     "ascending": "false",
                 },
                 timeout=20,
@@ -84,6 +84,7 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
     total_markets = len(data)
     token_candidates = 0
     seen_slugs: list[str] = []
+    token_seen_slugs: list[str] = []
 
     for m in data:
         try:
@@ -92,6 +93,9 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             q = str(m.get("question") or "")
             blob = f"{slug_l} {q.lower()}"
             seen_slugs.append(slug)
+
+            if token in blob:
+                token_seen_slugs.append(slug)
 
             if force:
                 if slug_l != force:
@@ -154,7 +158,8 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
         interval = max(60, round_minutes * 60)
         cur_bucket = (now // interval) * interval
 
-        for s in seen_slugs:
+        source_slugs = token_seen_slugs if token_seen_slugs else seen_slugs
+        for s in source_slugs:
             sfx = _suffix(s)
             if sfx > 0:
                 nearby.append((abs(sfx - cur_bucket), s))
