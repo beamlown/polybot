@@ -178,8 +178,10 @@ for r in rows:
         status = c("OPEN", CYN)
         ui_px, exec_px = get_price_views(slug, side, market_cache)
         clob_exec = get_clob_exec_mark(trade_token_id, clob)
+        # Safety: only trust CLOB token mark when it's reasonably close to Gamma-derived executable view.
         if clob_exec is not None:
-            exec_px = clob_exec
+            if exec_px is None or abs(clob_exec - exec_px) <= 0.15:
+                exec_px = clob_exec
         ui_txt = c("n/a", YLW) if ui_px is None else c(format_cents(ui_px), WHT)
 
         if exec_px is None:
