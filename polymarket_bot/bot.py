@@ -468,6 +468,18 @@ def maybe_auto_step_force_slug(current_slug: str) -> tuple[str, int | None]:
 
         # no step yet: show ETA to boundary
         eta = interval - (now_ts % interval)
+
+        # If boundary is imminent, pre-step so next scan is on the new slug.
+        if eta <= max(1, LOOP_SECONDS):
+            next_slug = _step_slug(current_slug, FORCE_SLUG_STEP_SIZE)
+            if next_slug:
+                state["slug"] = next_slug
+                state["last_step_ts"] = now_ts
+                state["last_clock_bucket"] = current_bucket + 1
+                _save_force_state(state)
+                print(f"Pre-step at boundary: force slug -> {next_slug}", flush=True)
+                return next_slug, interval
+
         state["last_clock_bucket"] = current_bucket
         _save_force_state(state)
         return current_slug, eta
