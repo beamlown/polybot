@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Dict, Any
 
@@ -11,6 +12,7 @@ except Exception:
 
 DB = Path(__file__).parent / "trades_v4.db"
 GAMMA_API = "https://gamma-api.polymarket.com"
+CLOSED_HIDE_AFTER_SECONDS = 300
 
 RST = "\033[0m"
 GRN = "\033[92m"
@@ -144,6 +146,8 @@ open_unrealized_total = 0.0
 realized_total = 0.0
 priced_open_rows = 0
 
+now_utc = datetime.now(UTC)
+
 for r in rows:
     idx = 0
     trade_id = r[idx]; idx += 1
@@ -165,6 +169,16 @@ for r in rows:
     bet_text = f"{side} ({bet_label})"
 
     if is_closed:
+        # Hide closed trades after a short window to keep monitor focused on active risk.
+        try:
+            closed_dt = datetime.fromisoformat(str(closed_ts).replace("Z", "+00:00"))
+            if closed_dt.tzinfo is None:
+                closed_dt = closed_dt.replace(tzinfo=UTC)
+            if (now_utc - closed_dt).total_seconds() > CLOSED_HIDE_AFTER_SECONDS:
+                continue
+        except Exception:
+            pass
+
         status = c("CLOSED", YLW)
         ui_txt = c("closed", YLW)
         exec_txt = c("closed", YLW)
@@ -206,4 +220,5 @@ ut_color = GRN if open_unrealized_total >= 0 else RED
 print(f"Realized PnL:   {c(f'{realized_total:+.2f}', rt_color)}")
 print(f"Unrealized PnL: {c(f'{open_unrealized_total:+.2f}', ut_color)} (priced open rows={priced_open_rows})")
 print(f"Net PnL:        {c(f'{realized_total + open_unrealized_total:+.2f}', GRN if realized_total + open_unrealized_total >= 0 else RED)}")
+print(c(f"Closed rows older than {CLOSED_HIDE_AFTER_SECONDS}s are hidden from this live screen.", WHT))
 print(c("Tip: use sell_position_v4.bat to pick and close a specific open trade.", WHT))
