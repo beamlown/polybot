@@ -70,6 +70,7 @@ MAX_HOPS_ON_MISS = _env_int("MAX_HOPS_ON_MISS", 2)
 FORCE_SLUG_STEP_SIZE = _env_int("FORCE_SLUG_STEP_SIZE", 300)
 FORCE_SLUG_STEP_SECONDS = _env_int("FORCE_SLUG_STEP_SECONDS", 300)
 MIN_SECONDS_TO_EXPIRY = _env_int("MIN_SECONDS_TO_EXPIRY", 20)
+EXPIRY_RESET_GRACE_SECONDS = _env_int("EXPIRY_RESET_GRACE_SECONDS", 20)
 LOOP_SECONDS = _env_int("LOOP_SECONDS", 60)
 AUTO_TAKE_PROFIT_PCT = _env_float("AUTO_TAKE_PROFIT_PCT", 0.25)
 AUTO_REENTER_AFTER_CASHOUT = os.getenv("AUTO_REENTER_AFTER_CASHOUT", "true").lower() == "true"
@@ -514,6 +515,8 @@ def main():
     print(f"Mode: {'PAPER' if PAPER_MODE else 'LIVE'} | Bankroll: ${bankroll:.2f}", flush=True)
     print("=" * 72, flush=True)
 
+    slug_grace_until_ts = 0
+
     while True:
         try:
             daily_cap = bankroll * MAX_DAILY_DRAWDOWN_PCT
@@ -667,6 +670,7 @@ def main():
 
             if slug_changed_this_loop:
                 runtime_force_slug = active_force_slug or runtime_force_slug
+                slug_grace_until_ts = int(time.time()) + max(0, EXPIRY_RESET_GRACE_SECONDS)
                 print("🔄 New slug established; resetting expiry checks on next scan.", flush=True)
                 print("-" * 72, flush=True)
                 time.sleep(LOOP_SECONDS)
@@ -704,6 +708,11 @@ def main():
                         seconds_left = None
 
                 if seconds_left is not None and seconds_left <= MIN_SECONDS_TO_EXPIRY:
+                    now_ts = int(time.time())
+                    if now_ts < slug_grace_until_ts:
+                        # After slug changes, give feed time to catch up before counting expiry skips.
+                        continue
+
                     skip_near_expiry += 1
                     spam_state = _load_expiry_spam_state()
                     spam_key = f"{active_force_slug}:{m.market_id}"
@@ -832,6 +841,7 @@ def main():
                     print(f"{side_emoji} Trade | {buy_side} | market={m.market_id} | entry={entry_price:.4f} | size={size:.4f} | {note}", flush=True)
 
             if slug_advanced_on_expiry:
+                slug_grace_until_ts = int(time.time()) + max(0, EXPIRY_RESET_GRACE_SECONDS)
                 print("🔄 Expired slug advanced; re-scanning next loop before new entries.", flush=True)
                 print("-" * 72, flush=True)
                 time.sleep(LOOP_SECONDS)
