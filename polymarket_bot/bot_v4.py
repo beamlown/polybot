@@ -17,6 +17,7 @@ STARTING_BANKROLL = float(os.getenv("STARTING_BANKROLL", "2000"))
 SERIES_PREFIX = os.getenv("SERIES_PREFIX", "btc-updown")
 ROUND_MINUTES = int(os.getenv("ROUND_MINUTES", "5"))
 FORCE_SLUG = os.getenv("V4_FORCE_SLUG", "").strip()
+AUTO_ROLL_FORCE_SLUG = os.getenv("AUTO_ROLL_FORCE_SLUG", "true").strip().lower() in ("1", "true", "yes", "on")
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
@@ -98,6 +99,14 @@ def seconds_to_next(slug: str) -> int | None:
         return None
 
 
+def _advance_slug_once(slug: str) -> str:
+    try:
+        base, raw = slug.rsplit("-", 1)
+        return f"{base}-{int(raw) + ROUND_MINUTES * 60}"
+    except Exception:
+        return slug
+
+
 def main():
     if ROUND_MINUTES <= 0:
         die(E_CONFIG, "ROUND_MINUTES must be > 0")
@@ -110,6 +119,8 @@ def main():
     print("POLYMARKET BOT V4 (clean + debuggable)")
     print("=" * 72)
 
+    current_force_slug = FORCE_SLUG
+
     while True:
         try:
             day_count = trades_today()
@@ -118,9 +129,15 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
-            market, derr = discover(SERIES_PREFIX, ROUND_MINUTES, force_slug=FORCE_SLUG or None)
+            market, derr = discover(SERIES_PREFIX, ROUND_MINUTES, force_slug=current_force_slug or None)
             if derr:
                 print(derr)
+                # If a forced slug has expired or disappeared, optionally roll forward automatically.
+                if current_force_slug and AUTO_ROLL_FORCE_SLUG and "[ERR 1103]" in derr:
+                    nxt = _advance_slug_once(current_force_slug)
+                    if nxt != current_force_slug:
+                        current_force_slug = nxt
+                        print(f"Auto-rolled forced slug -> {current_force_slug}")
                 time.sleep(LOOP_SECONDS)
                 continue
             if market is None:
@@ -136,8 +153,17 @@ def main():
             round_count = entries_this_round(market.slug)
             if round_count >= MAX_ENTRIES_PER_ROUND:
                 eta = seconds_to_next(market.slug)
-                eta_txt = f" | next in {eta}s" if eta is not None else ""
+                eta_safe = max(0, eta) if eta is not None else None
+                eta_txt = f" | next in {eta_safe}s" if eta_safe is not None else ""
                 print(f"Round: {market.slug} | No trade | round cap {round_count}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
+
+                # If pinned slug is already expired, roll to next round automatically.
+                if current_force_slug and AUTO_ROLL_FORCE_SLUG and eta is not None and eta < 0:
+                    nxt = _advance_slug_once(current_force_slug)
+                    if nxt != current_force_slug:
+                        current_force_slug = nxt
+                        print(f"Auto-rolled forced slug -> {current_force_slug}")
+
                 time.sleep(LOOP_SECONDS)
                 continue
 
