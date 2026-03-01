@@ -5,6 +5,11 @@ from pathlib import Path
 
 import requests
 
+try:
+    from py_clob_client.client import ClobClient
+except Exception:
+    ClobClient = None
+
 DB = Path(__file__).parent / "trades_v4.db"
 GAMMA_API = "https://gamma-api.polymarket.com"
 
@@ -20,6 +25,8 @@ def ensure_close_columns(conn: sqlite3.Connection) -> None:
         c.execute("ALTER TABLE trades ADD COLUMN close_note TEXT")
     if "realized_pnl" not in cols:
         c.execute("ALTER TABLE trades ADD COLUMN realized_pnl REAL")
+    if "trade_token_id" not in cols:
+        c.execute("ALTER TABLE trades ADD COLUMN trade_token_id TEXT")
     conn.commit()
 
 
@@ -69,7 +76,7 @@ def fetch_open_trades(conn: sqlite3.Connection):
     c = conn.cursor()
     return c.execute(
         """
-        SELECT id, ts, slug, side, entry, size
+        SELECT id, ts, slug, side, entry, size, trade_token_id
         FROM trades
         WHERE closed_ts IS NULL
         ORDER BY id DESC
@@ -89,7 +96,7 @@ def choose_trade(open_rows, arg_trade_id: int | None):
 
     print("Open trades:")
     for i, r in enumerate(open_rows, start=1):
-        tid, ts, slug, side, entry, size = r
+        tid, ts, slug, side, entry, size, trade_token_id = r
         print(f" {i}) id={tid} | {slug} | {side} | entry={float(entry):.4f} | size={float(size):.2f}")
 
     raw = input("Pick trade number to close (Enter = latest): ").strip()
@@ -126,24 +133,37 @@ def main() -> int:
         conn.close()
         return 1
 
-    tid, ts, slug, side, entry, size = chosen
+    tid, ts, slug, side, entry, size, trade_token_id = chosen
     q = get_quote(slug)
     if q is None:
         print(f"[SELL] Could not fetch live quote for {slug}.")
         conn.close()
         return 1
 
-    # Use side-aware executable-ish quote (bid for what we are selling).
-    if side == "BUY_YES":
-        close_price = q.get("best_bid") if q.get("best_bid") is not None else q.get("yes_last")
-    else:
-        # Selling NO -> approximate NO bid as (1 - YES ask)
-        yes_ask = q.get("best_ask")
-        if yes_ask is not None:
-            close_price = 1.0 - float(yes_ask)
+    # First choice: CLOB executable sell price for the held token.
+    close_price = None
+    if trade_token_id and ClobClient is not None:
+        try:
+            clob = ClobClient("https://clob.polymarket.com", chain_id=137)
+            qp = clob.get_price(trade_token_id, side="SELL")
+            p = float(qp.get("price"))
+            if 0 <= p <= 1:
+                close_price = p
+        except Exception:
+            close_price = None
+
+    # Fallback: side-aware Gamma approximation.
+    if close_price is None:
+        if side == "BUY_YES":
+            close_price = q.get("best_bid") if q.get("best_bid") is not None else q.get("yes_last")
         else:
-            yes_last = q.get("yes_last")
-            close_price = (1.0 - float(yes_last)) if yes_last is not None else None
+            # Selling NO -> approximate NO bid as (1 - YES ask)
+            yes_ask = q.get("best_ask")
+            if yes_ask is not None:
+                close_price = 1.0 - float(yes_ask)
+            else:
+                yes_last = q.get("yes_last")
+                close_price = (1.0 - float(yes_last)) if yes_last is not None else None
 
     if close_price is None:
         print(f"[SELL] Could not derive close price for {slug}.")

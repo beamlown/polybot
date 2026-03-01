@@ -4,6 +4,11 @@ from typing import Dict, Any
 
 import requests
 
+try:
+    from py_clob_client.client import ClobClient
+except Exception:
+    ClobClient = None
+
 DB = Path(__file__).parent / "trades_v4.db"
 GAMMA_API = "https://gamma-api.polymarket.com"
 
@@ -68,6 +73,17 @@ def _extract_yes_prices(m: Dict[str, Any]) -> tuple[float | None, float | None, 
     return yes_bid, yes_ask, yes_last
 
 
+def get_clob_exec_mark(token_id: str | None, clob_client) -> float | None:
+    if not token_id or clob_client is None:
+        return None
+    try:
+        q = clob_client.get_price(token_id, side="SELL")
+        p = to_float(q.get("price"), default=-1.0)
+        return p if 0 <= p <= 1 else None
+    except Exception:
+        return None
+
+
 def get_price_views(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> tuple[float | None, float | None]:
     m = get_market(slug, cache)
     if m is None:
@@ -97,8 +113,11 @@ cursor = conn.cursor()
 cols = [r[1] for r in cursor.execute("PRAGMA table_info(trades)").fetchall()]
 has_closed = "closed_ts" in cols
 has_realized = "realized_pnl" in cols
+has_trade_token = "trade_token_id" in cols
 
 select_sql = "SELECT id, ts, slug, side, entry, size"
+if has_trade_token:
+    select_sql += ", trade_token_id"
 if has_closed:
     select_sql += ", closed_ts"
 if has_realized:
@@ -110,6 +129,7 @@ count = int(cursor.execute("SELECT COUNT(*) FROM trades").fetchone()[0] or 0)
 conn.close()
 
 market_cache: Dict[str, Dict[str, Any]] = {}
+clob = ClobClient("https://clob.polymarket.com", chain_id=137) if ClobClient is not None else None
 
 print("=" * 126)
 print(c("POLYMARKET V4 LIVE PNL", CYN))
@@ -132,6 +152,9 @@ for r in rows:
     side = r[idx]; idx += 1
     entry = to_float(r[idx]); idx += 1
     size = to_float(r[idx]); idx += 1
+    trade_token_id = r[idx] if has_trade_token else None
+    if has_trade_token:
+        idx += 1
     closed_ts = r[idx] if has_closed else None
     if has_closed:
         idx += 1
@@ -154,6 +177,9 @@ for r in rows:
     else:
         status = c("OPEN", CYN)
         ui_px, exec_px = get_price_views(slug, side, market_cache)
+        clob_exec = get_clob_exec_mark(trade_token_id, clob)
+        if clob_exec is not None:
+            exec_px = clob_exec
         ui_txt = c("n/a", YLW) if ui_px is None else c(format_cents(ui_px), WHT)
 
         if exec_px is None:

@@ -53,6 +53,13 @@ def init_db():
             )
             """
         )
+
+        cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
+        if "trade_token_id" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN trade_token_id TEXT")
+        if "entry_source" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN entry_source TEXT")
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -78,13 +85,13 @@ def entries_this_round(slug: str) -> int:
     return n
 
 
-def log_trade(slug: str, market_id: str, side: str, entry: float, size: float, edge: float, note: str):
+def log_trade(slug: str, market_id: str, side: str, entry: float, size: float, edge: float, note: str, trade_token_id: str | None, entry_source: str):
     try:
         conn = sqlite3.connect(DB)
         c = conn.cursor()
         c.execute(
-            "INSERT INTO trades (ts, slug, market_id, side, entry, size, edge, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (datetime.now(UTC).isoformat(), slug, market_id, side, entry, size, edge, note),
+            "INSERT INTO trades (ts, slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.now(UTC).isoformat(), slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source),
         )
         conn.commit()
         conn.close()
@@ -193,8 +200,14 @@ def main():
                 depth = book.depth_top5
                 imbalance = book.imbalance
 
+            yes_best_bid = book.best_bid if (berr is None and book is not None) else market.best_bid
+            yes_best_ask = book.best_ask if (berr is None and book is not None) else market.best_ask
+
+            buy_yes_px = yes_best_ask if yes_best_ask is not None else market.yes_price
+            buy_no_px = (1.0 - yes_best_bid) if yes_best_bid is not None else market.no_price
+
             print(
-                f"Round: {market.slug} | yes={market.yes_price:.3f} | {stext} | spread={spread} | depth={depth:.1f} | imbalance={imbalance:.2f}"
+                f"Round: {market.slug} | yes={market.yes_price:.3f} | buy_yes={buy_yes_px:.3f} | buy_no={buy_no_px:.3f} | {stext} | spread={spread} | depth={depth:.1f} | imbalance={imbalance:.2f}"
             )
 
             if spread is not None and spread > MAX_SPREAD:
@@ -206,20 +219,26 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
-            edge_yes = prob - market.yes_price
-            edge_no = market.yes_price - prob
+            edge_yes = prob - buy_yes_px
+            edge_no = (1.0 - prob) - buy_no_px
 
             side = None
             entry = None
             edge = 0.0
+            trade_token_id = None
+            entry_source = "gamma"
             if edge_yes >= MIN_EDGE:
                 side = "BUY_YES"
-                entry = market.yes_price
+                entry = buy_yes_px
                 edge = edge_yes
+                trade_token_id = market.yes_token_id
+                entry_source = "clob" if yes_best_ask is not None else "gamma"
             elif edge_no >= MIN_EDGE:
                 side = "BUY_NO"
-                entry = market.no_price
+                entry = buy_no_px
                 edge = edge_no
+                trade_token_id = market.no_token_id
+                entry_source = "clob" if yes_best_bid is not None else "gamma"
 
             if not side:
                 print(f"No trade | edge_yes={edge_yes:.4f} edge_no={edge_no:.4f}")
@@ -228,8 +247,8 @@ def main():
 
             risk = bankroll * RISK_PCT
             size = risk / max(entry, 1e-6)
-            note = f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f}"
-            log_trade(market.slug, market.market_id, side, entry, size, edge, note)
+            note = f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f} source={entry_source}"
+            log_trade(market.slug, market.market_id, side, entry, size, edge, note, trade_token_id, entry_source)
             print(f"TRADE {side} | entry={entry:.4f} | size={size:.2f} | {note}")
 
             time.sleep(LOOP_SECONDS)

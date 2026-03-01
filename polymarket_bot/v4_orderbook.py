@@ -12,6 +12,8 @@ class OBStats:
     midpoint: Optional[float]
     depth_top5: float
     imbalance: float
+    best_bid: Optional[float]
+    best_ask: Optional[float]
 
 
 class OBReader:
@@ -37,6 +39,8 @@ class OBReader:
 
             spread = None
             midpoint = None
+            best_bid = float(bids[0].price) if bids else None
+            best_ask = float(asks[0].price) if asks else None
             try:
                 spread = float(self.c.get_spread(token_id)["spread"])
             except Exception:
@@ -46,6 +50,6 @@ class OBReader:
             except Exception:
                 pass
 
-            return OBStats(spread, midpoint, depth, imbalance), None
+            return OBStats(spread, midpoint, depth, imbalance, best_bid, best_ask), None
         except Exception as e:
             return None, fmt(E_ORDERBOOK_PARSE, f"orderbook parse failed: {e}")
