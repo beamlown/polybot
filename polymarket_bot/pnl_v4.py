@@ -174,6 +174,9 @@ select_sql += " FROM trades ORDER BY id DESC LIMIT 80"
 rows = cursor.execute(select_sql).fetchall()
 
 count = int(cursor.execute("SELECT COUNT(*) FROM trades").fetchone()[0] or 0)
+all_time_realized = 0.0
+if has_realized:
+    all_time_realized = float(cursor.execute("SELECT COALESCE(SUM(realized_pnl), 0.0) FROM trades WHERE closed_ts IS NOT NULL").fetchone()[0] or 0.0)
 conn.close()
 
 # Load starting bankroll from .env if available
@@ -283,12 +286,14 @@ for r in rows:
 
 print("-" * 146)
 rt_color = GRN if realized_total >= 0 else RED
+all_rt_color = GRN if all_time_realized >= 0 else RED
 ut_color = GRN if open_unrealized_total >= 0 else RED
-print(f"Realized PnL:   {c(f'{realized_total:+.2f}', rt_color)}")
-print(f"Unrealized PnL: {c(f'{open_unrealized_total:+.2f}', ut_color)} (priced open rows={priced_open_rows})")
-net_pnl = realized_total + open_unrealized_total
+print(f"Realized PnL (visible window): {c(f'{realized_total:+.2f}', rt_color)}")
+print(f"Realized PnL (all-time):       {c(f'{all_time_realized:+.2f}', all_rt_color)}")
+print(f"Unrealized PnL:                {c(f'{open_unrealized_total:+.2f}', ut_color)} (priced open rows={priced_open_rows})")
+net_pnl = all_time_realized + open_unrealized_total
 est_balance = STARTING_BANKROLL + net_pnl
-print(f"Net PnL:        {c(f'{net_pnl:+.2f}', GRN if net_pnl >= 0 else RED)}")
-print(f"Est. Balance:   {c(f'${est_balance:,.2f}', GRN if est_balance >= STARTING_BANKROLL else RED)} (start=${STARTING_BANKROLL:,.2f})")
+print(f"Net PnL (all-time+open):       {c(f'{net_pnl:+.2f}', GRN if net_pnl >= 0 else RED)}")
+print(f"Est. Balance:                  {c(f'${est_balance:,.2f}', GRN if est_balance >= STARTING_BANKROLL else RED)} (start=${STARTING_BANKROLL:,.2f})")
 print(c(f"Closed rows older than {CLOSED_HIDE_AFTER_SECONDS}s are hidden from this live screen.", WHT))
 print(c("Tip: use sell_position_v4.bat to pick and close a specific open trade.", WHT))
