@@ -428,8 +428,11 @@ def maybe_auto_group_take_profit(slug: str, sell_yes_px: float | None, sell_no_p
     return closed
 
 
-def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
+def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None) -> int:
     if AUTO_STOP_LOSS_PCT <= 0:
+        return 0
+    # Apply stop logic only in final minute of the round (user preference).
+    if eta_seconds is None or eta_seconds > 60:
         return 0
 
     conn = sqlite3.connect(DB)
@@ -720,7 +723,7 @@ def main():
             maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px)
             maybe_auto_group_take_profit(market.slug, sell_yes_px, sell_no_px)
             maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px)
-            maybe_auto_stop_loss(market.slug, sell_yes_px, sell_no_px)
+            maybe_auto_stop_loss(market.slug, eta_now, sell_yes_px, sell_no_px)
 
             # Round timeline window guard
             now_ts = int(datetime.now(UTC).timestamp())
