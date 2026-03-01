@@ -15,7 +15,11 @@ load_dotenv()
 
 STARTING_BANKROLL = float(os.getenv("STARTING_BANKROLL", "2000"))
 SERIES_PREFIX = os.getenv("SERIES_PREFIX", "btc-updown")
+SERIES_PREFIXES = [x.strip() for x in os.getenv("SERIES_PREFIXES", SERIES_PREFIX).split(",") if x.strip()]
 ROUND_MINUTES = int(os.getenv("ROUND_MINUTES", "5"))
+MAX_CONCURRENT_TRADES = int(os.getenv("MAX_CONCURRENT_TRADES", "2"))
+MIN_TOP_BOOK_USD = float(os.getenv("MIN_TOP_BOOK_USD", "50"))
+MIN_VOLUME24H = float(os.getenv("MIN_VOLUME24H", "5000"))
 FORCE_SLUG = os.getenv("V4_FORCE_SLUG", "").strip()
 AUTO_ROLL_FORCE_SLUG = os.getenv("AUTO_ROLL_FORCE_SLUG", "true").strip().lower() in ("1", "true", "yes", "on")
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
@@ -345,6 +349,14 @@ def recent_side_realized_pnl(side: str, lookback: int) -> float:
     return float(sum(float(r[0] or 0) for r in rows))
 
 
+def candidate_score(spread: float | None, depth: float, imbalance: float, in_band: bool) -> float:
+    s = spread if (spread is not None and spread > 0) else 0.03
+    score = (depth / max(s, 1e-6)) - (50.0 * abs(imbalance))
+    if in_band:
+        score += 500.0
+    return score
+
+
 def can_add_same_side_entry(slug: str, side: str, candidate_entry: float) -> tuple[bool, str]:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -663,7 +675,7 @@ def main():
     print(
         f"CONFIG | edge={MIN_EDGE:.3f} prob_delta={MIN_PROB_DISTANCE:.3f} side_adv={MIN_SIDE_ADVANTAGE:.3f} "
         f"sl={AUTO_STOP_LOSS_PCT:.2f} tp={AUTO_TAKE_PROFIT_PCT:.2f} partial={PARTIAL_TP_TRIGGER_PCT:.2f}/{PARTIAL_TP_SELL_FRACTION:.2f} "
-        f"entries_round={MAX_ENTRIES_PER_ROUND} same_side_open_cap={MAX_SAME_SIDE_OPEN_PER_ROUND} "
+        f"entries_round={MAX_ENTRIES_PER_ROUND} same_side_open_cap={MAX_SAME_SIDE_OPEN_PER_ROUND} prefixes={','.join(SERIES_PREFIXES)} max_conc={MAX_CONCURRENT_TRADES} "
         f"window={ENTRY_WINDOW_START_SECONDS}-{ENTRY_WINDOW_END_SECONDS}s loop={LOOP_SECONDS}s stop_cooldown={STOPLOSS_REENTRY_COOLDOWN_SECONDS}s"
     )
 
@@ -681,25 +693,74 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
-            market, derr = discover(SERIES_PREFIX, ROUND_MINUTES, force_slug=current_force_slug or None)
-            if derr:
-                print(derr)
-                # If a forced slug has expired or disappeared, optionally roll forward automatically.
-                if current_force_slug and AUTO_ROLL_FORCE_SLUG and "[ERR 1103]" in derr:
-                    nxt = _advance_slug_once(current_force_slug)
-                    if nxt != current_force_slug:
-                        current_force_slug = nxt
-                        print(f"Auto-rolled forced slug -> {current_force_slug}")
-                time.sleep(LOOP_SECONDS)
-                continue
-            if market is None:
-                print("[ERR 1103] no current market")
+            # Multi-market candidate discovery (CLOB-first quality checks).
+            candidates = []
+            prefixes = [SERIES_PREFIX] if current_force_slug else SERIES_PREFIXES
+            for pref in prefixes:
+                market, derr = discover(pref, ROUND_MINUTES, force_slug=current_force_slug or None)
+                if derr or market is None:
+                    if derr:
+                        print(f"CANDIDATE_FAIL | prefix={pref} | {derr}")
+                    continue
+
+                # Token/outcome sanity
+                if not market.yes_token_id or not market.no_token_id:
+                    print(f"CANDIDATE_FAIL | prefix={pref} | slug={market.slug} | reason=missing_token_ids")
+                    continue
+
+                book, berr = ob.read(market.yes_token_id)
+                if berr:
+                    print(f"CANDIDATE_FAIL | prefix={pref} | slug={market.slug} | reason=clob_quote_fail")
+                    continue
+
+                spread = book.spread
+                depth = book.depth_top5
+                yes_bid = book.best_bid
+                yes_ask = book.best_ask
+                top_bid_usd = (yes_bid or 0.0) * 100.0
+                top_ask_usd = (yes_ask or 0.0) * 100.0
+                vol_ok = (market.volume24h is None) or (market.volume24h >= MIN_VOLUME24H)
+
+                gate_ok = (
+                    (spread is not None and spread <= MAX_SPREAD)
+                    and top_bid_usd >= MIN_TOP_BOOK_USD
+                    and top_ask_usd >= MIN_TOP_BOOK_USD
+                    and depth >= MIN_DEPTH_TOP5
+                    and vol_ok
+                )
+                fail_reason = ""
+                if not gate_ok:
+                    if spread is None or spread > MAX_SPREAD:
+                        fail_reason = "spread"
+                    elif top_bid_usd < MIN_TOP_BOOK_USD or top_ask_usd < MIN_TOP_BOOK_USD:
+                        fail_reason = "top_book_usd"
+                    elif depth < MIN_DEPTH_TOP5:
+                        fail_reason = "depth"
+                    elif not vol_ok:
+                        fail_reason = "volume24h"
+
+                print(
+                    f"CANDIDATE | prefix={pref} slug={market.slug} suffix={market.suffix} market_id={market.market_id} "
+                    f"bid={yes_bid} ask={yes_ask} spread={spread} depth={depth:.1f} gate={gate_ok} reason={fail_reason or 'ok'}"
+                )
+
+                if gate_ok:
+                    in_band = (BUY_YES_MIN_ENTRY <= (yes_ask or market.yes_price) < BUY_YES_MAX_ENTRY) or (
+                        BUY_NO_MIN_ENTRY <= (1.0 - (yes_bid or market.yes_price)) < BUY_NO_MAX_ENTRY
+                    )
+                    score = candidate_score(spread, depth, book.imbalance, in_band)
+                    candidates.append((score, pref, market, book))
+
+            if not candidates:
                 time.sleep(LOOP_SECONDS)
                 continue
 
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            _, chosen_prefix, market, book = candidates[0]
+
             if market.slug != last_logged_slug:
                 print(
-                    f"Market selected | slug={market.slug} | market_id={market.market_id} "
+                    f"Market selected | prefix={chosen_prefix} | slug={market.slug} | suffix={market.suffix} | market_id={market.market_id} "
                     f"| yes_token_id={market.yes_token_id} | no_token_id={market.no_token_id}"
                 )
                 last_logged_slug = market.slug
@@ -710,20 +771,11 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
-            book, berr = ob.read(market.yes_token_id)
-            spread = None
-            depth = 0.0
-            imbalance = 0.0
-            if berr:
-                # Fallback to Gamma quoted spread/bid/ask when CLOB book is unavailable for token id.
-                spread = market.gamma_spread
-                if market.best_bid is not None and market.best_ask is not None:
-                    depth = 9999.0  # treat as available quote depth proxy
-                print(f"{berr} | fallback=gamma_quotes spread={spread} best_bid={market.best_bid} best_ask={market.best_ask}")
-            else:
-                spread = book.spread
-                depth = book.depth_top5
-                imbalance = book.imbalance
+            # book already fetched during candidate ranking
+            berr = None
+            spread = book.spread
+            depth = book.depth_top5
+            imbalance = book.imbalance
 
             yes_best_bid = book.best_bid if (berr is None and book is not None) else market.best_bid
             yes_best_ask = book.best_ask if (berr is None and book is not None) else market.best_ask

@@ -26,6 +26,7 @@ class MarketRound:
     gamma_spread: Optional[float]
     start_ts: Optional[int]
     end_ts: Optional[int]
+    volume24h: Optional[float]
 
 
 def _suffix(slug: str) -> int:
@@ -63,6 +64,10 @@ def _parse_iso_ts(value) -> Optional[int]:
         return int(dt.timestamp())
     except Exception:
         return None
+
+
+def _is_unixish_suffix(v: int) -> bool:
+    return 1_600_000_000 < v < 2_200_000_000
 
 
 def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] = None) -> tuple[Optional[MarketRound], Optional[str]]:
@@ -134,13 +139,14 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             blob = f"{slug_l} {q.lower()}"
             seen_slugs.append(slug)
 
-            if token in blob:
+            pattern_ok = slug_l.startswith(token) or (token in slug_l)
+            if pattern_ok:
                 token_seen_slugs.append(slug)
 
             if force:
                 if slug_l != force:
                     continue
-            elif token not in blob:
+            elif not pattern_ok:
                 continue
 
             token_candidates += 1
@@ -160,6 +166,12 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             sfx = _suffix(slug)
             if sfx <= 0:
                 continue
+
+            # Suffix sanity: if suffix looks timestamp-like, require reasonable recency window.
+            if _is_unixish_suffix(sfx):
+                now_ts = int(time.time())
+                if abs(now_ts - sfx) > 24 * 60 * 60:
+                    continue
 
             # Parse optional timestamps for diagnostics only.
             start_ts = _parse_iso_ts(m.get("startDateIso") or m.get("startDate"))
@@ -184,7 +196,14 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             except Exception:
                 pass
 
-            out.append(MarketRound(slug, market_id, q, yes, 1 - yes, yes_id, no_id, sfx, best_bid, best_ask, gamma_spread, start_ts, end_ts))
+            volume24h = None
+            try:
+                if m.get("volume24hr") is not None:
+                    volume24h = float(m.get("volume24hr"))
+            except Exception:
+                pass
+
+            out.append(MarketRound(slug, market_id, q, yes, 1 - yes, yes_id, no_id, sfx, best_bid, best_ask, gamma_spread, start_ts, end_ts, volume24h))
         except Exception:
             continue
 
