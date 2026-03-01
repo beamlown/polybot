@@ -452,15 +452,27 @@ def main():
             sell_yes_px = yes_best_bid if yes_best_bid is not None else market.yes_price
             sell_no_px = (1.0 - yes_best_ask) if yes_best_ask is not None else market.no_price
 
-            # Safety guard: reject suspicious quote mapping mismatches.
-            mismatch = abs(buy_yes_px - market.yes_price)
-            if mismatch > MAX_QUOTE_MISMATCH:
-                print(
-                    f"SKIP_BAD_QUOTE_MISMATCH | slug={market.slug} | gamma_yes={market.yes_price:.3f} "
-                    f"| buy_yes={buy_yes_px:.3f} | diff={mismatch:.3f}"
-                )
-                time.sleep(LOOP_SECONDS)
-                continue
+            # Use realtime book as primary anchor (Gamma can lag on 5m rounds).
+            realtime_yes = None
+            if yes_best_bid is not None and yes_best_ask is not None:
+                realtime_yes = (yes_best_bid + yes_best_ask) / 2.0
+            elif book is not None and book.midpoint is not None:
+                realtime_yes = book.midpoint
+            elif yes_best_ask is not None:
+                realtime_yes = yes_best_ask
+            elif yes_best_bid is not None:
+                realtime_yes = yes_best_bid
+
+            # Only guard if we have a realtime anchor; compare buy_yes vs realtime, not stale gamma.
+            if realtime_yes is not None:
+                mismatch = abs(buy_yes_px - realtime_yes)
+                if mismatch > MAX_QUOTE_MISMATCH:
+                    print(
+                        f"SKIP_BAD_QUOTE_MISMATCH | slug={market.slug} | realtime_yes={realtime_yes:.3f} "
+                        f"| buy_yes={buy_yes_px:.3f} | diff={mismatch:.3f}"
+                    )
+                    time.sleep(LOOP_SECONDS)
+                    continue
 
             eta_now = seconds_to_next(market.slug, market.end_ts)
             maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px)
