@@ -23,6 +23,7 @@ AUTO_TAKE_PROFIT_PCT = float(os.getenv("AUTO_TAKE_PROFIT_PCT", "0"))
 AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
 MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
 STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
+MAX_HOLD_SECONDS = int(os.getenv("MAX_HOLD_SECONDS", "300"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
@@ -321,6 +322,54 @@ def maybe_close_any_expired_open_positions() -> int:
     return closed
 
 
+def maybe_auto_close_stale_positions() -> int:
+    if MAX_HOLD_SECONDS <= 0:
+        return 0
+
+    now = datetime.now(UTC)
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    rows = c.execute(
+        """
+        SELECT id, ts, slug, side, entry, size
+        FROM trades
+        WHERE closed_ts IS NULL
+        ORDER BY id ASC
+        """
+    ).fetchall()
+
+    closed = 0
+    for tid, ts, slug, side, entry, size in rows:
+        try:
+            opened = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=UTC)
+        except Exception:
+            continue
+
+        age = (now - opened).total_seconds()
+        if age < MAX_HOLD_SECONDS:
+            continue
+
+        market, _ = discover(SERIES_PREFIX, ROUND_MINUTES, force_slug=slug)
+        yes_px = market.yes_price if market is not None else None
+        if yes_px is None:
+            continue
+
+        close_price = yes_px if side == "BUY_YES" else (1.0 - yes_px)
+        pnl = (float(close_price) - float(entry)) * float(size)
+        c.execute(
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+            (now.isoformat(), float(close_price), "max_hold_auto_close", float(pnl), int(tid)),
+        )
+        closed += 1
+        print(f"AUTO-SELL(TIMEOUT) id={tid} age={int(age)}s side={side} entry={float(entry):.4f} close={float(close_price):.4f} pnl={pnl:+.2f}")
+
+    conn.commit()
+    conn.close()
+    return closed
+
+
 def main():
     if ROUND_MINUTES <= 0:
         die(E_CONFIG, "ROUND_MINUTES must be > 0")
@@ -339,6 +388,7 @@ def main():
     while True:
         try:
             maybe_close_any_expired_open_positions()
+            maybe_auto_close_stale_positions()
 
             day_count = trades_today()
             if MAX_TRADES_PER_DAY > 0 and day_count >= MAX_TRADES_PER_DAY:
