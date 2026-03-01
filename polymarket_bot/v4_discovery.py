@@ -1,6 +1,7 @@
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime, UTC
 from typing import Optional
 
 import requests
@@ -23,6 +24,8 @@ class MarketRound:
     best_bid: Optional[float]
     best_ask: Optional[float]
     gamma_spread: Optional[float]
+    start_ts: Optional[int]
+    end_ts: Optional[int]
 
 
 def _suffix(slug: str) -> int:
@@ -43,6 +46,23 @@ def _token_ids(raw) -> tuple[Optional[str], Optional[str]]:
     if isinstance(raw, list) and len(raw) >= 2:
         return str(raw[0]), str(raw[1])
     return None, None
+
+
+def _parse_iso_ts(value) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return int(dt.timestamp())
+    except Exception:
+        return None
 
 
 def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] = None) -> tuple[Optional[MarketRound], Optional[str]]:
@@ -121,6 +141,14 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             if sfx <= 0:
                 continue
 
+            # Keep only markets that are live right now when timestamps are available.
+            start_ts = _parse_iso_ts(m.get("startDateIso") or m.get("startDate"))
+            end_ts = _parse_iso_ts(m.get("endDateIso") or m.get("endDate"))
+            now_ts = int(time.time())
+            if start_ts is not None and end_ts is not None:
+                if not (start_ts <= now_ts <= end_ts):
+                    continue
+
             best_bid = None
             best_ask = None
             gamma_spread = None
@@ -140,7 +168,7 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             except Exception:
                 pass
 
-            out.append(MarketRound(slug, market_id, q, yes, 1 - yes, yes_id, no_id, sfx, best_bid, best_ask, gamma_spread))
+            out.append(MarketRound(slug, market_id, q, yes, 1 - yes, yes_id, no_id, sfx, best_bid, best_ask, gamma_spread, start_ts, end_ts))
         except Exception:
             continue
 

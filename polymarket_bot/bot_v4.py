@@ -92,8 +92,10 @@ def log_trade(slug: str, market_id: str, side: str, entry: float, size: float, e
         die(E_DB_WRITE, f"db write failed: {e}")
 
 
-def seconds_to_next(slug: str) -> int | None:
+def seconds_to_next(slug: str, end_ts: int | None = None) -> int | None:
     try:
+        if end_ts is not None:
+            return end_ts - int(datetime.now(UTC).timestamp())
         sfx = int(slug.rsplit("-", 1)[-1])
         return (sfx + ROUND_MINUTES * 60) - int(datetime.now(UTC).timestamp())
     except Exception:
@@ -156,7 +158,7 @@ def main():
 
             round_count = entries_this_round(market.slug)
             if round_count >= MAX_ENTRIES_PER_ROUND:
-                eta = seconds_to_next(market.slug)
+                eta = seconds_to_next(market.slug, market.end_ts)
                 eta_safe = max(0, eta) if eta is not None else None
                 eta_txt = f" | next in {eta_safe}s" if eta_safe is not None else ""
                 print(f"Round: {market.slug} | No trade | round cap {round_count}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
