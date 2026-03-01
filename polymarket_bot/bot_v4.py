@@ -21,6 +21,8 @@ AUTO_ROLL_FORCE_SLUG = os.getenv("AUTO_ROLL_FORCE_SLUG", "true").strip().lower()
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
 AUTO_TAKE_PROFIT_PCT = float(os.getenv("AUTO_TAKE_PROFIT_PCT", "0"))
 AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
+MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
+STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
@@ -167,6 +169,32 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
     conn.commit()
     conn.close()
     return closed
+
+
+def has_recent_stoploss(slug: str) -> bool:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    row = c.execute(
+        """
+        SELECT closed_ts
+        FROM trades
+        WHERE slug = ? AND close_note = 'auto_stop_loss'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (slug,),
+    ).fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return False
+    try:
+        ts = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - ts).total_seconds()
+        return age < STOPLOSS_REENTRY_COOLDOWN_SECONDS
+    except Exception:
+        return False
 
 
 def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
@@ -370,6 +398,16 @@ def main():
             sell_yes_px = yes_best_bid if yes_best_bid is not None else market.yes_price
             sell_no_px = (1.0 - yes_best_ask) if yes_best_ask is not None else market.no_price
 
+            # Safety guard: reject suspicious quote mapping mismatches.
+            mismatch = abs(buy_yes_px - market.yes_price)
+            if mismatch > MAX_QUOTE_MISMATCH:
+                print(
+                    f"SKIP_BAD_QUOTE_MISMATCH | slug={market.slug} | gamma_yes={market.yes_price:.3f} "
+                    f"| buy_yes={buy_yes_px:.3f} | diff={mismatch:.3f}"
+                )
+                time.sleep(LOOP_SECONDS)
+                continue
+
             eta_now = seconds_to_next(market.slug, market.end_ts)
             maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px)
             maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px)
@@ -402,6 +440,10 @@ def main():
                 continue
             if depth < MIN_DEPTH_TOP5:
                 print("No trade | depth too thin")
+                time.sleep(LOOP_SECONDS)
+                continue
+            if has_recent_stoploss(market.slug):
+                print(f"No trade | stop-loss cooldown active ({STOPLOSS_REENTRY_COOLDOWN_SECONDS}s)")
                 time.sleep(LOOP_SECONDS)
                 continue
 
