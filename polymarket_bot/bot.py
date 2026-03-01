@@ -556,8 +556,9 @@ def main():
             print(f"\n🧭 Scan | Active markets: {len(markets)}", flush=True)
             market_prices = {str(m.market_id): float(m.yes_price) for m in markets}
 
+            cands = []
+            token = f"{SERIES_PREFIX}-{ROUND_MINUTES}m"
             if DEBUG_CANDIDATES:
-                token = f"{SERIES_PREFIX}-{ROUND_MINUTES}m"
                 cands = [m.slug for m in markets if m.slug and token in m.slug.lower()]
                 if cands:
                     print(f"🔎 Candidate slugs ({token}): {', '.join(cands[:3])}", flush=True)
@@ -571,11 +572,16 @@ def main():
                 print(f"₿ Signal | {btc_reason}", flush=True)
 
             base_force_slug = "" if USE_FILTER_ONLY else runtime_force_slug
-            # URL fallback can be used in both modes to recognize the live Polymarket page slug.
-            if AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL:
+            # Prefer visible candidate slug in filter-only mode.
+            if USE_FILTER_ONLY and cands:
+                base_force_slug = str(cands[0]).lower()
+
+            # URL fallback can be used when candidates are absent.
+            if AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL and not base_force_slug:
                 slug_from_url = _slug_from_event_url(CURRENT_EVENT_URL)
                 if slug_from_url:
-                    base_force_slug = slug_from_url if USE_FILTER_ONLY else slug_from_url
+                    base_force_slug = slug_from_url
+
             active_force_slug, step_eta = maybe_auto_step_force_slug(base_force_slug)
             runtime_force_slug = active_force_slug or runtime_force_slug
             slug_changed_this_loop = False
