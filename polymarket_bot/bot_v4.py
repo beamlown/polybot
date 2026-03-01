@@ -32,6 +32,9 @@ STRONG_REGIME_ONLY = os.getenv("STRONG_REGIME_ONLY", "true").strip().lower() in 
 BULL_MIN_VOTES = int(os.getenv("BULL_MIN_VOTES", "4"))
 BEAR_MAX_VOTES = int(os.getenv("BEAR_MAX_VOTES", "1"))
 MIN_SIDE_ADVANTAGE = float(os.getenv("MIN_SIDE_ADVANTAGE", "0.02"))
+MAX_SAME_SIDE_OPEN_PER_ROUND = int(os.getenv("MAX_SAME_SIDE_OPEN_PER_ROUND", "2"))
+SIDE_PERF_LOOKBACK = int(os.getenv("SIDE_PERF_LOOKBACK", "30"))
+LOSING_SIDE_EDGE_PENALTY = float(os.getenv("LOSING_SIDE_EDGE_PENALTY", "0.03"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
@@ -267,6 +270,36 @@ def parse_regime_votes(signal_text: str) -> tuple[str | None, int | None]:
     except Exception:
         return regime, votes
     return regime, votes
+
+
+def open_same_side_count(slug: str, side: str) -> int:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
+    if "closed_ts" in cols and "remaining_size" in cols:
+        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL AND COALESCE(remaining_size,size)>0"
+    elif "closed_ts" in cols:
+        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL"
+    else:
+        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=?"
+    n = int(c.execute(q, (slug, side)).fetchone()[0] or 0)
+    conn.close()
+    return n
+
+
+def recent_side_realized_pnl(side: str, lookback: int) -> float:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
+    if "realized_pnl" not in cols or "closed_ts" not in cols:
+        conn.close()
+        return 0.0
+    rows = c.execute(
+        "SELECT COALESCE(realized_pnl,0) FROM trades WHERE side=? AND closed_ts IS NOT NULL ORDER BY id DESC LIMIT ?",
+        (side, max(1, lookback)),
+    ).fetchall()
+    conn.close()
+    return float(sum(float(r[0] or 0) for r in rows))
 
 
 def can_add_same_side_entry(slug: str, side: str, candidate_entry: float) -> tuple[bool, str]:
@@ -669,8 +702,17 @@ def main():
                 long_allowed = (regime == "BULL" and votes >= BULL_MIN_VOTES)
                 short_allowed = (regime == "BEAR" and votes <= BEAR_MAX_VOTES)
 
-            yes_ok = edge_yes >= MIN_EDGE and long_allowed
-            no_ok = edge_no >= MIN_EDGE and short_allowed
+            side_yes_min_edge = MIN_EDGE
+            side_no_min_edge = MIN_EDGE
+            yes_recent = recent_side_realized_pnl("BUY_YES", SIDE_PERF_LOOKBACK)
+            no_recent = recent_side_realized_pnl("BUY_NO", SIDE_PERF_LOOKBACK)
+            if yes_recent < 0:
+                side_yes_min_edge += LOSING_SIDE_EDGE_PENALTY
+            if no_recent < 0:
+                side_no_min_edge += LOSING_SIDE_EDGE_PENALTY
+
+            yes_ok = edge_yes >= side_yes_min_edge and long_allowed
+            no_ok = edge_no >= side_no_min_edge and short_allowed
 
             # Avoid coin-flip entries: require one side to clearly dominate.
             if yes_ok and no_ok and abs(edge_yes - edge_no) < MIN_SIDE_ADVANTAGE:
@@ -696,6 +738,11 @@ def main():
             if not side:
                 regime_txt = f"regime={regime} votes={votes}" if regime is not None else "regime=n/a"
                 print(f"No trade | edge_yes={edge_yes:.4f} edge_no={edge_no:.4f} | {regime_txt}")
+                time.sleep(LOOP_SECONDS)
+                continue
+
+            if open_same_side_count(market.slug, side) >= MAX_SAME_SIDE_OPEN_PER_ROUND:
+                print(f"No trade | same-side open cap {MAX_SAME_SIDE_OPEN_PER_ROUND}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
