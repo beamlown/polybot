@@ -80,20 +80,40 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             r.raise_for_status()
             data = r.json()
         else:
-            # For fast 5m rounds, recency is more reliable than top-volume slices.
-            r = requests.get(
-                f"{GAMMA_API}/markets",
-                params={
-                    "limit": 2000,
-                    "active": "true",
-                    "closed": "false",
-                    "order": "startDate",
-                    "ascending": "false",
-                },
-                timeout=20,
-            )
-            r.raise_for_status()
-            data = r.json()
+            # Deterministic current-round probing first: now bucket +/- nearby buckets.
+            interval = max(60, round_minutes * 60)
+            now = int(time.time())
+            cur_bucket = (now // interval) * interval
+            probe_offsets = [0, -1, 1, -2, 2, -3, 3, -4, 4]
+            probe_hits = []
+            for off in probe_offsets:
+                slug_probe = f"{token}-{cur_bucket + off * interval}"
+                rr = requests.get(
+                    f"{GAMMA_API}/markets",
+                    params={"slug": slug_probe, "limit": 3, "active": "true", "closed": "false"},
+                    timeout=10,
+                )
+                rr.raise_for_status()
+                payload = rr.json()
+                if isinstance(payload, list) and payload:
+                    probe_hits.extend(payload)
+            if probe_hits:
+                data = probe_hits
+            else:
+                # Fallback broad scan
+                r = requests.get(
+                    f"{GAMMA_API}/markets",
+                    params={
+                        "limit": 2000,
+                        "active": "true",
+                        "closed": "false",
+                        "order": "startDate",
+                        "ascending": "false",
+                    },
+                    timeout=20,
+                )
+                r.raise_for_status()
+                data = r.json()
     except Exception as e:
         return None, fmt(E_DISCOVERY_HTTP, f"gamma /markets request failed: {e}")
 
