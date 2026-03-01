@@ -26,6 +26,7 @@ MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.03"))
 MIN_DEPTH_TOP5 = float(os.getenv("MIN_DEPTH_TOP5", "50"))
 LOOP_SECONDS = int(os.getenv("LOOP_SECONDS", "5"))
 DB = "trades_v4.db"
+BUILD_TAG = "v4.2026-03-01.001"
 
 
 def die(code: int, msg: str):
@@ -116,7 +117,7 @@ def main():
     bankroll = STARTING_BANKROLL
 
     print("=" * 72)
-    print("POLYMARKET BOT V4 (clean + debuggable)")
+    print(f"POLYMARKET BOT V4 (clean + debuggable) | {BUILD_TAG}")
     print("=" * 72)
 
     current_force_slug = FORCE_SLUG
