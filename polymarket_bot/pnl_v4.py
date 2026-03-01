@@ -86,12 +86,15 @@ def get_clob_exec_mark(token_id: str | None, clob_client) -> float | None:
         return None
 
 
-def get_price_views(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> tuple[float | None, float | None]:
+def get_price_views(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> tuple[float | None, float | None, float | None, float | None]:
     m = get_market(slug, cache)
     if m is None:
-        return None, None
+        return None, None, None, None
 
     yes_bid, yes_ask, yes_last = _extract_yes_prices(m)
+
+    buy_up = yes_ask if yes_ask is not None else yes_last
+    buy_down = (1.0 - yes_bid) if yes_bid is not None else ((1.0 - yes_last) if yes_last is not None else None)
 
     # UI-ish mark: last/outcome-based
     ui_mark = yes_last if side == "BUY_YES" else ((1.0 - yes_last) if yes_last is not None else None)
@@ -102,7 +105,7 @@ def get_price_views(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> t
     else:
         exec_mark = (1.0 - yes_ask) if yes_ask is not None else ((1.0 - yes_last) if yes_last is not None else None)
 
-    return ui_mark, exec_mark
+    return ui_mark, exec_mark, buy_up, buy_down
 
 
 if not DB.exists():
@@ -133,14 +136,14 @@ conn.close()
 market_cache: Dict[str, Dict[str, Any]] = {}
 clob = ClobClient("https://clob.polymarket.com", chain_id=137) if ClobClient is not None else None
 
-print("=" * 126)
+print("=" * 146)
 print(c("POLYMARKET V4 LIVE PNL", CYN))
-print("=" * 126)
+print("=" * 146)
 print(f"Total entries in DB: {count}")
 print("Legend: BUY_YES = bought UP (YES), BUY_NO = bought DOWN (NO)")
-print("-" * 126)
-print(f"{'ID':<5} {'Status':<8} {'Round':<26} {'Bet':<18} {'Entry':<10} {'UI Mark':<10} {'Exec Mark':<10} {'Size':<8} {'PnL $':<12} {'PnL %':<8}")
-print("-" * 126)
+print("-" * 146)
+print(f"{'ID':<5} {'Status':<8} {'Round':<26} {'Bet':<18} {'Entry':<10} {'UI Mark':<10} {'Exec Mark':<10} {'Buy UP':<10} {'Buy DOWN':<10} {'Size':<8} {'PnL $':<12} {'PnL %':<8}")
+print("-" * 146)
 
 open_unrealized_total = 0.0
 realized_total = 0.0
@@ -182,6 +185,8 @@ for r in rows:
         status = c("CLOSED", YLW)
         ui_txt = c("closed", YLW)
         exec_txt = c("closed", YLW)
+        buy_up_txt = c("-", YLW)
+        buy_down_txt = c("-", YLW)
         pnl = realized_pnl
         pnl_pct = (pnl / (entry * size) * 100.0) if entry > 0 and size > 0 else 0.0
         realized_total += pnl
@@ -190,13 +195,15 @@ for r in rows:
         pnl_pct_txt = c(f"{pnl_pct:+.1f}%", color)
     else:
         status = c("OPEN", CYN)
-        ui_px, exec_px = get_price_views(slug, side, market_cache)
+        ui_px, exec_px, buy_up_px, buy_down_px = get_price_views(slug, side, market_cache)
         clob_exec = get_clob_exec_mark(trade_token_id, clob)
         # Safety: only trust CLOB token mark when it's reasonably close to Gamma-derived executable view.
         if clob_exec is not None:
             if exec_px is None or abs(clob_exec - exec_px) <= 0.15:
                 exec_px = clob_exec
         ui_txt = c("n/a", YLW) if ui_px is None else c(format_cents(ui_px), WHT)
+        buy_up_txt = c("n/a", YLW) if buy_up_px is None else c(format_cents(buy_up_px), CYN)
+        buy_down_txt = c("n/a", YLW) if buy_down_px is None else c(format_cents(buy_down_px), CYN)
 
         if exec_px is None:
             exec_txt = c("n/a", YLW)
@@ -212,9 +219,9 @@ for r in rows:
             pnl_txt = c(f"{pnl:+.2f}", color)
             pnl_pct_txt = c(f"{pnl_pct:+.1f}%", color)
 
-    print(f"{trade_id:<5} {status:<8} {slug[:26]:<26} {bet_text:<18} {format_cents(entry):<10} {ui_txt:<10} {exec_txt:<10} {size:<8.2f} {pnl_txt:<12} {pnl_pct_txt:<8}")
+    print(f"{trade_id:<5} {status:<8} {slug[:26]:<26} {bet_text:<18} {format_cents(entry):<10} {ui_txt:<10} {exec_txt:<10} {buy_up_txt:<10} {buy_down_txt:<10} {size:<8.2f} {pnl_txt:<12} {pnl_pct_txt:<8}")
 
-print("-" * 126)
+print("-" * 146)
 rt_color = GRN if realized_total >= 0 else RED
 ut_color = GRN if open_unrealized_total >= 0 else RED
 print(f"Realized PnL:   {c(f'{realized_total:+.2f}', rt_color)}")
