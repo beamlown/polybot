@@ -24,6 +24,9 @@ AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
 MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
 STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
 MAX_HOLD_SECONDS = int(os.getenv("MAX_HOLD_SECONDS", "300"))
+STRONG_REGIME_ONLY = os.getenv("STRONG_REGIME_ONLY", "true").strip().lower() in ("1", "true", "yes", "on")
+BULL_MIN_VOTES = int(os.getenv("BULL_MIN_VOTES", "4"))
+BEAR_MAX_VOTES = int(os.getenv("BEAR_MAX_VOTES", "1"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
@@ -200,6 +203,22 @@ def has_recent_stoploss(slug: str) -> bool:
         return age < STOPLOSS_REENTRY_COOLDOWN_SECONDS
     except Exception:
         return False
+
+
+def parse_regime_votes(signal_text: str) -> tuple[str | None, int | None]:
+    regime = None
+    votes = None
+    try:
+        parts = [p.strip() for p in str(signal_text).split("|")]
+        for p in parts:
+            if p.startswith("regime="):
+                regime = p.split("=", 1)[1].strip().upper()
+            elif p.startswith("votes="):
+                raw = p.split("=", 1)[1].strip().split("/", 1)[0]
+                votes = int(raw)
+    except Exception:
+        return regime, votes
+    return regime, votes
 
 
 def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
@@ -513,6 +532,7 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
+            regime, votes = parse_regime_votes(stext or "")
             edge_yes = prob - buy_yes_px
             edge_no = (1.0 - prob) - buy_no_px
 
@@ -521,13 +541,19 @@ def main():
             edge = 0.0
             trade_token_id = None
             entry_source = "gamma"
-            if edge_yes >= MIN_EDGE:
+            long_allowed = True
+            short_allowed = True
+            if STRONG_REGIME_ONLY and regime is not None and votes is not None:
+                long_allowed = (regime == "BULL" and votes >= BULL_MIN_VOTES)
+                short_allowed = (regime == "BEAR" and votes <= BEAR_MAX_VOTES)
+
+            if edge_yes >= MIN_EDGE and long_allowed:
                 side = "BUY_YES"
                 entry = buy_yes_px
                 edge = edge_yes
                 trade_token_id = market.yes_token_id
                 entry_source = "clob" if yes_best_ask is not None else "gamma"
-            elif edge_no >= MIN_EDGE:
+            elif edge_no >= MIN_EDGE and short_allowed:
                 side = "BUY_NO"
                 entry = buy_no_px
                 edge = edge_no
@@ -535,7 +561,8 @@ def main():
                 entry_source = "clob" if yes_best_bid is not None else "gamma"
 
             if not side:
-                print(f"No trade | edge_yes={edge_yes:.4f} edge_no={edge_no:.4f}")
+                regime_txt = f"regime={regime} votes={votes}" if regime is not None else "regime=n/a"
+                print(f"No trade | edge_yes={edge_yes:.4f} edge_no={edge_no:.4f} | {regime_txt}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
