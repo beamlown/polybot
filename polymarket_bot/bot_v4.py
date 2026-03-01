@@ -34,6 +34,7 @@ MIN_REENTRY_PRICE_IMPROVEMENT = float(os.getenv("MIN_REENTRY_PRICE_IMPROVEMENT",
 STRONG_REGIME_ONLY = os.getenv("STRONG_REGIME_ONLY", "true").strip().lower() in ("1", "true", "yes", "on")
 BULL_MIN_VOTES = int(os.getenv("BULL_MIN_VOTES", "4"))
 BEAR_MAX_VOTES = int(os.getenv("BEAR_MAX_VOTES", "1"))
+MIN_PROB_DISTANCE = float(os.getenv("MIN_PROB_DISTANCE", "0.06"))
 MIN_SIDE_ADVANTAGE = float(os.getenv("MIN_SIDE_ADVANTAGE", "0.02"))
 MAX_SAME_SIDE_OPEN_PER_ROUND = int(os.getenv("MAX_SAME_SIDE_OPEN_PER_ROUND", "2"))
 SIDE_PERF_LOOKBACK = int(os.getenv("SIDE_PERF_LOOKBACK", "30"))
@@ -783,6 +784,13 @@ def main():
             edge_yes = prob - buy_yes_px
             edge_no = (1.0 - prob) - buy_no_px
 
+            # Directional guard: only take side aligned with forecast, and skip weak 50/50 forecasts.
+            prob_delta = abs(prob - 0.5)
+            if prob_delta < MIN_PROB_DISTANCE:
+                print(f"No trade | forecast too close to 50/50 (prob={prob:.3f}, min_delta={MIN_PROB_DISTANCE:.3f})")
+                time.sleep(LOOP_SECONDS)
+                continue
+
             side = None
             entry = None
             edge = 0.0
@@ -814,13 +822,16 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
-            if yes_ok and (not no_ok or edge_yes >= edge_no):
+            prefer_yes = prob > 0.5
+            prefer_no = prob < 0.5
+
+            if prefer_yes and yes_ok and (not no_ok or edge_yes >= edge_no):
                 side = "BUY_YES"
                 entry = buy_yes_px
                 edge = edge_yes
                 trade_token_id = market.yes_token_id
                 entry_source = "clob" if yes_best_ask is not None else "gamma"
-            elif no_ok:
+            elif prefer_no and no_ok and (not yes_ok or edge_no >= edge_yes):
                 side = "BUY_NO"
                 entry = buy_no_px
                 edge = edge_no
