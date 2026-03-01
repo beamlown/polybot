@@ -250,6 +250,49 @@ def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_
     return closed
 
 
+def maybe_close_any_expired_open_positions() -> int:
+    """Safety sweep: close any leftover open trades from expired rounds, even if slug changed."""
+    now_ts = int(datetime.now(UTC).timestamp())
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    rows = c.execute(
+        """
+        SELECT id, slug, side, entry, size
+        FROM trades
+        WHERE closed_ts IS NULL
+        ORDER BY id ASC
+        """
+    ).fetchall()
+
+    closed = 0
+    for tid, slug, side, entry, size in rows:
+        try:
+            sfx = int(str(slug).rsplit("-", 1)[-1])
+        except Exception:
+            continue
+        if now_ts <= (sfx + ROUND_MINUTES * 60):
+            continue
+
+        # expired: best-effort mark from Gamma at close time
+        market, _ = discover(SERIES_PREFIX, ROUND_MINUTES, force_slug=slug)
+        yes_px = market.yes_price if market is not None else None
+        if yes_px is None:
+            continue
+
+        close_price = yes_px if side == "BUY_YES" else (1.0 - yes_px)
+        pnl = (float(close_price) - float(entry)) * float(size)
+        c.execute(
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+            (datetime.now(UTC).isoformat(), float(close_price), "expired_sweep_auto_close", float(pnl), int(tid)),
+        )
+        closed += 1
+        print(f"AUTO-SELL(SWEEP) id={tid} slug={slug} side={side} close={float(close_price):.4f} pnl={pnl:+.2f}")
+
+    conn.commit()
+    conn.close()
+    return closed
+
+
 def main():
     if ROUND_MINUTES <= 0:
         die(E_CONFIG, "ROUND_MINUTES must be > 0")
@@ -267,6 +310,8 @@ def main():
 
     while True:
         try:
+            maybe_close_any_expired_open_positions()
+
             day_count = trades_today()
             if MAX_TRADES_PER_DAY > 0 and day_count >= MAX_TRADES_PER_DAY:
                 print(f"No trade | daily cap {day_count}/{MAX_TRADES_PER_DAY}")
