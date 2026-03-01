@@ -29,6 +29,7 @@ BREAKEVEN_BUFFER_PCT = float(os.getenv("BREAKEVEN_BUFFER_PCT", "0.01"))
 AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
 MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
 STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
+STOP_LOSS_ARMING_DELAY_SECONDS = int(os.getenv("STOP_LOSS_ARMING_DELAY_SECONDS", "15"))
 MAX_HOLD_SECONDS = int(os.getenv("MAX_HOLD_SECONDS", "300"))
 SAME_SIDE_ENTRY_COOLDOWN_SECONDS = int(os.getenv("SAME_SIDE_ENTRY_COOLDOWN_SECONDS", "20"))
 MIN_REENTRY_PRICE_IMPROVEMENT = float(os.getenv("MIN_REENTRY_PRICE_IMPROVEMENT", "0.01"))
@@ -43,12 +44,17 @@ SIDE_PERF_LOOKBACK = int(os.getenv("SIDE_PERF_LOOKBACK", "30"))
 LOSING_SIDE_EDGE_PENALTY = float(os.getenv("LOSING_SIDE_EDGE_PENALTY", "0.03"))
 ENTRY_PRICE_FLOOR = float(os.getenv("ENTRY_PRICE_FLOOR", "0.08"))
 ENTRY_PRICE_CEIL = float(os.getenv("ENTRY_PRICE_CEIL", "0.92"))
+BUY_NO_MIN_ENTRY = float(os.getenv("BUY_NO_MIN_ENTRY", "0.30"))
+BUY_NO_MAX_ENTRY = float(os.getenv("BUY_NO_MAX_ENTRY", "0.40"))
+BUY_YES_MIN_ENTRY = float(os.getenv("BUY_YES_MIN_ENTRY", "0.40"))
+BUY_YES_MAX_ENTRY = float(os.getenv("BUY_YES_MAX_ENTRY", "0.60"))
 HIGH_CONVICTION_MULTIPLIER = float(os.getenv("HIGH_CONVICTION_MULTIPLIER", "3.0"))
 HIGH_CONV_MIN_EDGE = float(os.getenv("HIGH_CONV_MIN_EDGE", "0.22"))
 HIGH_CONV_MIN_PROB = float(os.getenv("HIGH_CONV_MIN_PROB", "0.72"))
 HIGH_CONV_MIN_VOTES = int(os.getenv("HIGH_CONV_MIN_VOTES", "6"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
+MAX_TRADES_PER_SLUG = int(os.getenv("MAX_TRADES_PER_SLUG", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.03"))
 MIN_DEPTH_TOP5 = float(os.getenv("MIN_DEPTH_TOP5", "50"))
@@ -116,6 +122,14 @@ def trades_today() -> int:
     d = datetime.now(UTC).date().isoformat()
     c.execute("SELECT COUNT(*) FROM trades WHERE ts LIKE ?", (f"{d}%",))
     n = int(c.fetchone()[0] or 0)
+    conn.close()
+    return n
+
+
+def trades_taken_on_slug(slug: str) -> int:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    n = int(c.execute("SELECT COUNT(*) FROM trades WHERE slug = ?", (slug,)).fetchone()[0] or 0)
     conn.close()
     return n
 
@@ -445,7 +459,7 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done, 0) AS ptd
+        SELECT id, ts, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done, 0) AS ptd
         FROM trades
         WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
         ORDER BY id ASC
@@ -456,7 +470,17 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
     # If any position on a side trips stop-loss, close ALL open positions on that side for this slug.
     stop_yes = False
     stop_no = False
-    for _, side, entry, _, ptd in rows:
+    now_utc = datetime.now(UTC)
+    for _, ts_raw, side, entry, _, ptd in rows:
+        try:
+            opened = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=UTC)
+            if (now_utc - opened).total_seconds() < STOP_LOSS_ARMING_DELAY_SECONDS:
+                continue
+        except Exception:
+            continue
+
         entry = float(entry)
         floor = entry * (1.0 - AUTO_STOP_LOSS_PCT)
         if BREAKEVEN_AFTER_PARTIAL and int(ptd) == 1:
@@ -468,7 +492,7 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
 
     closed = 0
     now_iso = datetime.now(UTC).isoformat()
-    for tid, side, entry, size, ptd in rows:
+    for tid, ts_raw, side, entry, size, ptd in rows:
         if side == "BUY_YES" and not stop_yes:
             continue
         if side == "BUY_NO" and not stop_no:
@@ -758,6 +782,14 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
+            if trades_taken_on_slug(market.slug) >= MAX_TRADES_PER_SLUG:
+                eta = eta_now
+                eta_safe = max(0, eta) if eta is not None else None
+                eta_txt = f" | next in {eta_safe}s" if eta_safe is not None else ""
+                print(f"Round: {market.slug} | No trade | slug cap {MAX_TRADES_PER_SLUG}{eta_txt}")
+                time.sleep(LOOP_SECONDS)
+                continue
+
             round_count = open_positions_this_round(market.slug)
             if round_count >= MAX_ENTRIES_PER_ROUND:
                 eta = eta_now
@@ -836,6 +868,10 @@ def main():
             no_fair_limit = no_fair * (1.0 - FAIR_VALUE_DISCOUNT_PCT)
             yes_ok = yes_ok and (buy_yes_px <= yes_fair_limit)
             no_ok = no_ok and (buy_no_px <= no_fair_limit)
+
+            # Side-specific profitable entry zones from empirical stats.
+            yes_ok = yes_ok and (BUY_YES_MIN_ENTRY <= buy_yes_px < BUY_YES_MAX_ENTRY)
+            no_ok = no_ok and (BUY_NO_MIN_ENTRY <= buy_no_px < BUY_NO_MAX_ENTRY)
 
             # Avoid coin-flip entries: require one side to clearly dominate.
             if yes_ok and no_ok and abs(edge_yes - edge_no) < MIN_SIDE_ADVANTAGE:
