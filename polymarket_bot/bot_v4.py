@@ -120,6 +120,7 @@ def main():
     print("=" * 72)
 
     current_force_slug = FORCE_SLUG
+    last_logged_slug = None
 
     while True:
         try:
@@ -145,10 +146,12 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
-            print(
-                f"Market selected | slug={market.slug} | market_id={market.market_id} "
-                f"| yes_token_id={market.yes_token_id} | no_token_id={market.no_token_id}"
-            )
+            if market.slug != last_logged_slug:
+                print(
+                    f"Market selected | slug={market.slug} | market_id={market.market_id} "
+                    f"| yes_token_id={market.yes_token_id} | no_token_id={market.no_token_id}"
+                )
+                last_logged_slug = market.slug
 
             round_count = entries_this_round(market.slug)
             if round_count >= MAX_ENTRIES_PER_ROUND:
