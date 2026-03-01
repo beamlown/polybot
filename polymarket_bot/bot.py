@@ -5,7 +5,7 @@ import re
 import shutil
 import sqlite3
 from pathlib import Path
-from datetime import datetime, date, UTC
+from datetime import datetime, date, timezone
 
 import requests
 
@@ -14,6 +14,31 @@ try:
 except ImportError:
     def load_dotenv():
         return False
+
+
+
+def _slug_suffix(slug: str | None) -> int:
+    """Return trailing integer in a slug like btc-updown-5m-<suffix>."""
+    if not slug:
+        return 0
+    try:
+        return int(str(slug).rsplit("-", 1)[-1])
+    except Exception:
+        return 0
+
+
+def _latest_visible_slug(markets) -> str | None:
+    """Pick the most recent visible slug (by trailing numeric suffix)."""
+    best = None
+    best_suf = 0
+    for m in markets:
+        suf = getattr(m, "slug_suffix", None)
+        if suf is None:
+            suf = _slug_suffix(getattr(m, "slug", None))
+        if suf >= best_suf and getattr(m, "slug", None):
+            best_suf = suf
+            best = getattr(m, "slug", None)
+    return best
 
 from data_client import MarketClient
 from strategy import fair_probability, should_buy_yes, should_buy_no
@@ -63,7 +88,6 @@ AUTO_SLUG_FROM_URL = os.getenv("AUTO_SLUG_FROM_URL", "true").lower() == "true"
 CURRENT_EVENT_URL = os.getenv("CURRENT_EVENT_URL", "").strip()
 ROUND_MINUTES = _env_int("ROUND_MINUTES", 5)
 SERIES_PREFIX = os.getenv("SERIES_PREFIX", "btc-updown").lower()
-USE_FILTER_ONLY = os.getenv("USE_FILTER_ONLY", "true").lower() == "true"
 DEBUG_CANDIDATES = os.getenv("DEBUG_CANDIDATES", "true").lower() == "true"
 ENABLE_SLUG_PROMPT = os.getenv("ENABLE_SLUG_PROMPT", "true").lower() == "true"
 STEP_ON_MISS = os.getenv("STEP_ON_MISS", "true").lower() == "true"
@@ -120,7 +144,7 @@ def log_trade(market_id: str, question: str, side: str, price: float, size: floa
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO trades (ts, market_id, question, side, price, size, mode, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (datetime.now(UTC).isoformat(), market_id, question, side, price, size, mode, note),
+        (datetime.now(timezone.utc).isoformat(), market_id, question, side, price, size, mode, note),
     )
     conn.commit()
     conn.close()
@@ -163,7 +187,7 @@ def cooldown_ready(market_id: str, side: str = "BUY_YES") -> bool:
         return True
     try:
         last_ts = datetime.fromisoformat(str(row[0]))
-        return (datetime.now(UTC) - last_ts).total_seconds() >= REENTRY_COOLDOWN_SECONDS
+        return (datetime.now(timezone.utc) - last_ts).total_seconds() >= REENTRY_COOLDOWN_SECONDS
     except Exception:
         return True
 
@@ -284,7 +308,7 @@ def maybe_auto_cashout(market_prices: dict[str, float]) -> tuple[bool, float]:
 
     # Archive and reset DB as a paper "cash out"
     CASHOUT_ARCHIVE_DIR.mkdir(exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     archived = CASHOUT_ARCHIVE_DIR / f"trades_{ts}.db"
     try:
         if Path(DB_PATH).exists():
@@ -556,14 +580,26 @@ def main():
             print(f"\n🧭 Scan | Active markets: {len(markets)}", flush=True)
             market_prices = {str(m.market_id): float(m.yes_price) for m in markets}
 
-            cands = []
-            token = f"{SERIES_PREFIX}-{ROUND_MINUTES}m"
             if DEBUG_CANDIDATES:
+
+                token = f"{SERIES_PREFIX}-{ROUND_MINUTES}m"
+
                 cands = [m.slug for m in markets if m.slug and token in m.slug.lower()]
+
+                latest = _latest_visible_slug(markets)
+
+                if latest:
+
+                    print(f"🆕 Latest visible slug: {latest} (suffix={_slug_suffix(latest)})", flush=True)
+
                 if cands:
+
                     print(f"🔎 Candidate slugs ({token}): {', '.join(cands[:3])}", flush=True)
+
                 else:
+
                     print(f"🔎 Candidate slugs ({token}): none", flush=True)
+
 
             btc_prob = None
             btc_reason = ""
@@ -571,13 +607,8 @@ def main():
                 btc_prob, btc_reason = get_btc_signal_prob()
                 print(f"₿ Signal | {btc_reason}", flush=True)
 
-            base_force_slug = "" if USE_FILTER_ONLY else runtime_force_slug
-            # Prefer visible candidate slug in filter-only mode.
-            if USE_FILTER_ONLY and cands:
-                base_force_slug = str(cands[0]).lower()
-
-            # URL fallback can be used when candidates are absent.
-            if AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL and not base_force_slug:
+            base_force_slug = runtime_force_slug
+            if AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL:
                 slug_from_url = _slug_from_event_url(CURRENT_EVENT_URL)
                 if slug_from_url:
                     base_force_slug = slug_from_url
@@ -632,33 +663,23 @@ def main():
 
                         candidate = stepped
 
-                    # Fallback: if a single BTC round is visible, only adopt if it's not older than current target.
+                    # Fallback: if a single BTC 5m market is visible, lock onto its actual slug directly.
                     if forced_hits == 0:
-                        btc_round_slugs = []
-                        series_token = f"{SERIES_PREFIX}-{ROUND_MINUTES}m"
+                        btc5_slugs = []
                         for m in markets:
                             m_slug = (m.slug or "").lower()
-                            if series_token in m_slug:
-                                btc_round_slugs.append(m_slug)
-
-                        if len(btc_round_slugs) == 1 and btc_round_slugs[0]:
-                            visible_slug = btc_round_slugs[0]
-
-                            def _slug_epoch_val(s: str) -> int:
-                                try:
-                                    return int(s.rsplit("-", 1)[-1])
-                                except Exception:
-                                    return 0
-
-                            if _slug_epoch_val(visible_slug) >= _slug_epoch_val(active_force_slug):
-                                active_force_slug = visible_slug
-                                slug_changed_this_loop = True
-                                state = _load_force_state(active_force_slug)
-                                state["slug"] = active_force_slug
-                                state["last_step_ts"] = int(time.time())
-                                _save_force_state(state)
-                                print(f"Force slug miss -> adopted visible round slug: '{active_force_slug}'", flush=True)
-                                forced_hits = 1
+                            q = (m.question or "").lower()
+                            if ("btc-updown-5m" in m_slug) or ("bitcoin" in q and "up or down" in q and "5" in q):
+                                btc5_slugs.append(m_slug)
+                        if len(btc5_slugs) == 1 and btc5_slugs[0]:
+                            active_force_slug = btc5_slugs[0]
+                            slug_changed_this_loop = True
+                            state = _load_force_state(active_force_slug)
+                            state["slug"] = active_force_slug
+                            state["last_step_ts"] = int(time.time())
+                            _save_force_state(state)
+                            print(f"Force slug miss -> adopted visible btc5 slug: '{active_force_slug}'", flush=True)
+                            forced_hits = 1
 
                 if forced_hits == 0:
                     # On miss, do NOT keep hopping ahead; hold current target slug and wait.
@@ -720,7 +741,7 @@ def main():
                 if seconds_left is None and m.end_date:
                     try:
                         end_dt = datetime.fromisoformat(str(m.end_date).replace("Z", "+00:00"))
-                        seconds_left = int((end_dt - datetime.now(UTC)).total_seconds())
+                        seconds_left = int((end_dt - datetime.now(timezone.utc)).total_seconds())
                     except Exception:
                         seconds_left = None
 

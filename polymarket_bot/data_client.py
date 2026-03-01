@@ -23,8 +23,8 @@ class Market:
     signal_prob: float  # simple placeholder estimate
     end_date: str | None = None
     slug: str | None = None
+    slug_suffix: int | None = None  # e.g., the trailing epoch in btc-updown-5m-<suffix>
     outcomes: list[str] | None = None
-
 
 class MarketClient:
     """Read public market data from Polymarket Gamma API."""
@@ -42,7 +42,6 @@ class MarketClient:
         self.clob_pages = int(os.getenv("CLOB_MARKET_PAGES", "6"))
         self.round_minutes = int(os.getenv("ROUND_MINUTES", "5"))
         self.series_prefix = os.getenv("SERIES_PREFIX", "btc-updown").lower()
-        self.use_filter_only = os.getenv("USE_FILTER_ONLY", "true").lower() == "true"
 
     def _fetch_events(self) -> list[dict]:
         if self.force_event_slug:
@@ -187,6 +186,7 @@ class MarketClient:
                             signal_prob=self._simple_signal_prob(yes_price),
                             end_date=end_date_raw,
                             slug=slug,
+                            slug_suffix=slug_ts,
                             outcomes=outcomes,
                         )
                     )
@@ -216,8 +216,6 @@ class MarketClient:
             clob_markets = self._fetch_markets_clob()
             if clob_markets:
                 return clob_markets
-            if self.use_filter_only:
-                return []
 
         events = self._fetch_events()
         markets: List[Market] = []
@@ -265,12 +263,6 @@ class MarketClient:
                     except Exception:
                         if self.require_end_date:
                             continue
-
-                slug = str(m.get("slug") or event.get("slug") or "").lower()
-                qtext = str(m.get("question") or m.get("title") or event.get("title") or "").lower()
-                token = f"{self.series_prefix}-{self.round_minutes}m"
-                if self.use_filter_only and token not in f"{slug} {qtext}":
-                    continue
 
                 prices = self._parse_outcome_prices(m.get("outcomePrices"))
                 if not prices:
