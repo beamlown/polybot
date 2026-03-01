@@ -66,8 +66,8 @@ def _rsi(values: list[float], period: int = 14) -> float:
 
 def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
     try:
-        c1 = _series("1m", 40)
-        c5 = _series("5m", 20)
+        c1 = _series("1m", 60)
+        c5 = _series("5m", 25)
     except Exception as e:
         return None, None, fmt(E_SIGNAL_HTTP, f"price source failed: {e}")
 
@@ -77,20 +77,20 @@ def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
         m1_slow = _pct(c1[-16], c1[-1])
         m5 = _pct(c5[-4], c5[-1])
 
-        # Last-10 candle structure (1m): breadth + body pressure
-        last10 = c1[-10:]
+        # Last-25 candle structure (1m): breadth + body pressure
+        last25 = c1[-25:]
         up_candles = 0
         down_candles = 0
         body_sum = 0.0
-        for i in range(1, len(last10)):
-            d = last10[i] - last10[i - 1]
+        for i in range(1, len(last25)):
+            d = last25[i] - last25[i - 1]
             body_sum += d
             if d >= 0:
                 up_candles += 1
             else:
                 down_candles += 1
         candle_breadth = (up_candles - down_candles) / max(1, (up_candles + down_candles))
-        candle_body_bias = body_sum / max(1e-9, last10[0])
+        candle_body_bias = body_sum / max(1e-9, last25[0])
 
         # Trend state via EMA spread on 1m
         ema9 = _ema(c1[-20:], 9)
@@ -134,8 +134,8 @@ def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
             f" | m5={m5:.3%}"
             f" | ema9-21={ema_spread:.3%}"
             f" | rsi14={rsi14:.1f}"
-            f" | last10_up={up_candles} down={down_candles}"
-            f" | last10_body={candle_body_bias:.3%}"
+            f" | last25_up={up_candles} down={down_candles}"
+            f" | last25_body={candle_body_bias:.3%}"
             f" | up_chance={prob*100:.1f}%"
         )
         return prob, text, None
