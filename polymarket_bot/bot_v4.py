@@ -274,6 +274,22 @@ def parse_regime_votes(signal_text: str) -> tuple[str | None, int | None]:
     return regime, votes
 
 
+def has_open_opposite_side(slug: str, side: str) -> bool:
+    opposite = "BUY_NO" if side == "BUY_YES" else "BUY_YES"
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
+    if "closed_ts" in cols and "remaining_size" in cols:
+        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL AND COALESCE(remaining_size,size)>0"
+    elif "closed_ts" in cols:
+        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL"
+    else:
+        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=?"
+    n = int(c.execute(q, (slug, opposite)).fetchone()[0] or 0)
+    conn.close()
+    return n > 0
+
+
 def open_same_side_count(slug: str, side: str) -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -748,6 +764,11 @@ def main():
             if not side:
                 regime_txt = f"regime={regime} votes={votes}" if regime is not None else "regime=n/a"
                 print(f"No trade | edge_yes={edge_yes:.4f} edge_no={edge_no:.4f} | {regime_txt}")
+                time.sleep(LOOP_SECONDS)
+                continue
+
+            if has_open_opposite_side(market.slug, side):
+                print("No trade | opposite side already open this round")
                 time.sleep(LOOP_SECONDS)
                 continue
 
