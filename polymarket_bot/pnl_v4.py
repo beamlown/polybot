@@ -86,6 +86,48 @@ def get_clob_exec_mark(token_id: str | None, clob_client) -> float | None:
         return None
 
 
+def get_clob_buy_up_down(slug: str, cache: Dict[str, Dict[str, Any]], clob_client) -> tuple[float | None, float | None]:
+    if clob_client is None:
+        return None, None
+    m = get_market(slug, cache)
+    if not m:
+        return None, None
+
+    raw = m.get("clobTokenIds")
+    yes_id = None
+    no_id = None
+    try:
+        if isinstance(raw, str):
+            import json
+            raw = json.loads(raw)
+        if isinstance(raw, list) and len(raw) >= 2:
+            yes_id = str(raw[0])
+            no_id = str(raw[1])
+    except Exception:
+        return None, None
+
+    buy_up = None
+    buy_down = None
+    try:
+        if yes_id:
+            qy = clob_client.get_price(yes_id, side="BUY")
+            py = to_float(qy.get("price"), default=-1.0)
+            if 0 <= py <= 1:
+                buy_up = py
+    except Exception:
+        pass
+    try:
+        if no_id:
+            qn = clob_client.get_price(no_id, side="BUY")
+            pn = to_float(qn.get("price"), default=-1.0)
+            if 0 <= pn <= 1:
+                buy_down = pn
+    except Exception:
+        pass
+
+    return buy_up, buy_down
+
+
 def get_price_views(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> tuple[float | None, float | None, float | None, float | None]:
     m = get_market(slug, cache)
     if m is None:
@@ -196,6 +238,12 @@ for r in rows:
     else:
         status = c("OPEN", CYN)
         ui_px, exec_px, buy_up_px, buy_down_px = get_price_views(slug, side, market_cache)
+        clob_buy_up, clob_buy_down = get_clob_buy_up_down(slug, market_cache, clob)
+        if clob_buy_up is not None:
+            buy_up_px = clob_buy_up
+        if clob_buy_down is not None:
+            buy_down_px = clob_buy_down
+
         clob_exec = get_clob_exec_mark(trade_token_id, clob)
         # Safety: only trust CLOB token mark when it's reasonably close to Gamma-derived executable view.
         if clob_exec is not None:
