@@ -37,20 +37,86 @@ def _series(interval: str, limit: int):
         return _coinbase(60 if interval == "1m" else 300, limit)
 
 
+def _ema(values: list[float], span: int) -> float:
+    if not values:
+        return 0.0
+    alpha = 2.0 / (span + 1.0)
+    out = values[0]
+    for v in values[1:]:
+        out = (alpha * v) + ((1.0 - alpha) * out)
+    return out
+
+
+def _rsi(values: list[float], period: int = 14) -> float:
+    if len(values) < period + 1:
+        return 50.0
+    gains = 0.0
+    losses = 0.0
+    for i in range(-period, 0):
+        d = values[i] - values[i - 1]
+        if d >= 0:
+            gains += d
+        else:
+            losses += -d
+    if losses == 0:
+        return 100.0
+    rs = (gains / period) / (losses / period)
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
 def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
     try:
-        c1 = _series("1m", 8)
-        c5 = _series("5m", 5)
+        c1 = _series("1m", 40)
+        c5 = _series("5m", 20)
     except Exception as e:
         return None, None, fmt(E_SIGNAL_HTTP, f"price source failed: {e}")
 
     try:
-        m1 = _pct(c1[-6], c1[-1])
+        # Momentum
+        m1_fast = _pct(c1[-4], c1[-1])
+        m1_slow = _pct(c1[-16], c1[-1])
         m5 = _pct(c5[-4], c5[-1])
-        score = (m1 * 0.65) + (m5 * 0.35)
-        prob = 0.5 + max(-0.25, min(0.25, score * 90))
-        prob = max(0.05, min(0.95, prob))
-        text = f"short_trend={m1:.3%} | medium_trend={m5:.3%} | up_chance={prob*100:.1f}%"
+
+        # Trend state via EMA spread on 1m
+        ema9 = _ema(c1[-20:], 9)
+        ema21 = _ema(c1[-30:], 21)
+        ema_spread = (ema9 - ema21) / ema21 if ema21 > 0 else 0.0
+
+        # Overbought/oversold pressure
+        rsi14 = _rsi(c1, 14)
+        rsi_bias = (rsi14 - 50.0) / 50.0  # -1..+1 approx
+
+        # Composite score
+        score = (
+            (m1_fast * 0.40)
+            + (m1_slow * 0.20)
+            + (m5 * 0.20)
+            + (ema_spread * 0.15)
+            + (rsi_bias * 0.05)
+        )
+
+        prob = 0.5 + max(-0.30, min(0.30, score * 65.0))
+        prob = max(0.03, min(0.97, prob))
+
+        # Human-readable vote card
+        bull_votes = 0
+        bull_votes += 1 if m1_fast > 0 else 0
+        bull_votes += 1 if m1_slow > 0 else 0
+        bull_votes += 1 if m5 > 0 else 0
+        bull_votes += 1 if ema_spread > 0 else 0
+        bull_votes += 1 if rsi14 > 50 else 0
+
+        regime = "BULL" if bull_votes >= 4 else ("BEAR" if bull_votes <= 1 else "MIXED")
+
+        text = (
+            f"regime={regime} votes={bull_votes}/5"
+            f" | m1_fast={m1_fast:.3%}"
+            f" | m1_slow={m1_slow:.3%}"
+            f" | m5={m5:.3%}"
+            f" | ema9-21={ema_spread:.3%}"
+            f" | rsi14={rsi14:.1f}"
+            f" | up_chance={prob*100:.1f}%"
+        )
         return prob, text, None
     except Exception as e:
         return None, None, fmt(E_SIGNAL_PARSE, f"signal parse failed: {e}")
