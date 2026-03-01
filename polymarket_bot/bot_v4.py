@@ -35,6 +35,7 @@ STRONG_REGIME_ONLY = os.getenv("STRONG_REGIME_ONLY", "true").strip().lower() in 
 BULL_MIN_VOTES = int(os.getenv("BULL_MIN_VOTES", "4"))
 BEAR_MAX_VOTES = int(os.getenv("BEAR_MAX_VOTES", "1"))
 MIN_PROB_DISTANCE = float(os.getenv("MIN_PROB_DISTANCE", "0.06"))
+FAIR_VALUE_DISCOUNT_PCT = float(os.getenv("FAIR_VALUE_DISCOUNT_PCT", "0.03"))
 MIN_SIDE_ADVANTAGE = float(os.getenv("MIN_SIDE_ADVANTAGE", "0.02"))
 MAX_SAME_SIDE_OPEN_PER_ROUND = int(os.getenv("MAX_SAME_SIDE_OPEN_PER_ROUND", "2"))
 SIDE_PERF_LOOKBACK = int(os.getenv("SIDE_PERF_LOOKBACK", "30"))
@@ -814,6 +815,13 @@ def main():
             yes_ok = edge_yes >= side_yes_min_edge and long_allowed
             no_ok = edge_no >= side_no_min_edge and short_allowed
 
+            # Fair-value discount guard: only buy when market is below modeled fair value by a margin.
+            yes_fair_limit = prob * (1.0 - FAIR_VALUE_DISCOUNT_PCT)
+            no_fair = (1.0 - prob)
+            no_fair_limit = no_fair * (1.0 - FAIR_VALUE_DISCOUNT_PCT)
+            yes_ok = yes_ok and (buy_yes_px <= yes_fair_limit)
+            no_ok = no_ok and (buy_no_px <= no_fair_limit)
+
             # Avoid coin-flip entries: require one side to clearly dominate.
             if yes_ok and no_ok and abs(edge_yes - edge_no) < MIN_SIDE_ADVANTAGE:
                 print(
@@ -840,7 +848,11 @@ def main():
 
             if not side:
                 regime_txt = f"regime={regime} votes={votes}" if regime is not None else "regime=n/a"
-                print(f"No trade | edge_yes={edge_yes:.4f} edge_no={edge_no:.4f} | {regime_txt}")
+                print(
+                    f"No trade | edge_yes={edge_yes:.4f} edge_no={edge_no:.4f} "
+                    f"| fair_yes<= {yes_fair_limit:.3f} fair_no<= {no_fair_limit:.3f} "
+                    f"| {regime_txt}"
+                )
                 time.sleep(LOOP_SECONDS)
                 continue
 
