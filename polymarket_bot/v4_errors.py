@@ -1,0 +1,22 @@
+"""Structured error codes for V4 diagnostics."""
+
+E_DISCOVERY_HTTP = 1101
+E_DISCOVERY_PARSE = 1102
+E_DISCOVERY_NONE = 1103
+
+E_SIGNAL_HTTP = 1201
+E_SIGNAL_PARSE = 1202
+E_SIGNAL_NONE = 1203
+
+E_ORDERBOOK_HTTP = 1301
+E_ORDERBOOK_PARSE = 1302
+E_ORDERBOOK_EMPTY = 1303
+
+E_DB_INIT = 1401
+E_DB_WRITE = 1402
+
+E_CONFIG = 1501
+
+
+def fmt(code: int, msg: str) -> str:
+    return f"[ERR {code}] {msg}"
