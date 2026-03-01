@@ -22,6 +22,7 @@ MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
 AUTO_TAKE_PROFIT_PCT = float(os.getenv("AUTO_TAKE_PROFIT_PCT", "0"))
 PARTIAL_TP_TRIGGER_PCT = float(os.getenv("PARTIAL_TP_TRIGGER_PCT", "0.30"))
 PARTIAL_TP_SELL_FRACTION = float(os.getenv("PARTIAL_TP_SELL_FRACTION", "0.25"))
+GROUP_TAKE_PROFIT_PCT = float(os.getenv("GROUP_TAKE_PROFIT_PCT", "0.30"))
 AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
 MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
 STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
@@ -363,6 +364,66 @@ def can_add_same_side_entry(slug: str, side: str, candidate_entry: float) -> tup
     return True, ""
 
 
+def maybe_auto_group_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
+    if GROUP_TAKE_PROFIT_PCT <= 0:
+        return 0
+
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    rows = c.execute(
+        """
+        SELECT id, side, entry, COALESCE(remaining_size, size) AS rem
+        FROM trades
+        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
+        ORDER BY id ASC
+        """,
+        (slug,),
+    ).fetchall()
+
+    by_side = {"BUY_YES": [], "BUY_NO": []}
+    for tid, side, entry, rem in rows:
+        if side in by_side:
+            by_side[side].append((int(tid), float(entry), float(rem)))
+
+    closed = 0
+    now_iso = datetime.now(UTC).isoformat()
+
+    for side, bucket in by_side.items():
+        if len(bucket) < 2:  # only for grouped same-side stacks
+            continue
+
+        mark = sell_yes_px if side == "BUY_YES" else sell_no_px
+        if mark is None:
+            continue
+
+        cost = sum(entry * rem for _, entry, rem in bucket)
+        if cost <= 0:
+            continue
+        value = sum(float(mark) * rem for _, _, rem in bucket)
+        pnl_pct = (value - cost) / cost
+
+        if pnl_pct < GROUP_TAKE_PROFIT_PCT:
+            continue
+
+        for tid, entry, rem in bucket:
+            pnl = (float(mark) - entry) * rem
+            c.execute(
+                "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
+                (now_iso, float(mark), "group_take_profit", float(pnl), int(tid)),
+            )
+            closed += 1
+
+        net = realized_net_pnl()
+        print(
+            f"ALERT GROUP_TAKE_PROFIT | slug={slug} side={side} legs={len(bucket)} pnl_pct={pnl_pct*100:.1f}% "
+            f"mark={float(mark):.4f} net_realized={net:+.2f}"
+        )
+
+    conn.commit()
+    conn.close()
+    return closed
+
+
 def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
     if AUTO_STOP_LOSS_PCT <= 0:
         return 0
@@ -651,6 +712,7 @@ def main():
 
             eta_now = seconds_to_next(market.slug, market.end_ts)
             maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px)
+            maybe_auto_group_take_profit(market.slug, sell_yes_px, sell_no_px)
             maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px)
             maybe_auto_stop_loss(market.slug, sell_yes_px, sell_no_px)
 
