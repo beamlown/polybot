@@ -107,7 +107,7 @@ def main():
     bankroll = STARTING_BANKROLL
 
     print("=" * 72)
-    print("🚀 POLYMARKET BOT V4 (clean + debuggable)")
+    print("POLYMARKET BOT V4 (clean + debuggable)")
     print("=" * 72)
 
     while True:
