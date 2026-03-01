@@ -42,6 +42,10 @@ SIDE_PERF_LOOKBACK = int(os.getenv("SIDE_PERF_LOOKBACK", "30"))
 LOSING_SIDE_EDGE_PENALTY = float(os.getenv("LOSING_SIDE_EDGE_PENALTY", "0.03"))
 ENTRY_PRICE_FLOOR = float(os.getenv("ENTRY_PRICE_FLOOR", "0.08"))
 ENTRY_PRICE_CEIL = float(os.getenv("ENTRY_PRICE_CEIL", "0.92"))
+HIGH_CONVICTION_MULTIPLIER = float(os.getenv("HIGH_CONVICTION_MULTIPLIER", "3.0"))
+HIGH_CONV_MIN_EDGE = float(os.getenv("HIGH_CONV_MIN_EDGE", "0.22"))
+HIGH_CONV_MIN_PROB = float(os.getenv("HIGH_CONV_MIN_PROB", "0.72"))
+HIGH_CONV_MIN_VOTES = int(os.getenv("HIGH_CONV_MIN_VOTES", "6"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
@@ -882,9 +886,23 @@ def main():
                 continue
 
             balance_now = current_balance_realized_only()
-            risk = balance_now * RISK_PCT
+            risk_mult = 1.0
+            # High-conviction sizing only for strong YES setups (never guaranteed, still risk-managed).
+            if (
+                side == "BUY_YES"
+                and regime == "BULL"
+                and (votes is not None and votes >= HIGH_CONV_MIN_VOTES)
+                and prob >= HIGH_CONV_MIN_PROB
+                and edge >= HIGH_CONV_MIN_EDGE
+            ):
+                risk_mult = max(1.0, HIGH_CONVICTION_MULTIPLIER)
+
+            risk = balance_now * RISK_PCT * risk_mult
             size = risk / max(entry, 1e-6)
-            note = f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f} source={entry_source} bal={balance_now:.2f} risk={risk:.2f}"
+            note = (
+                f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f} "
+                f"source={entry_source} bal={balance_now:.2f} risk={risk:.2f} mult={risk_mult:.2f}"
+            )
             log_trade(market.slug, market.market_id, side, entry, size, edge, note, trade_token_id, entry_source)
             print(f"TRADE {side} | entry={entry:.4f} | size={size:.2f} | {note}")
 
