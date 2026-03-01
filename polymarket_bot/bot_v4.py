@@ -89,10 +89,14 @@ def trades_today() -> int:
     return n
 
 
-def entries_this_round(slug: str) -> int:
+def open_positions_this_round(slug: str) -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM trades WHERE slug = ?", (slug,))
+    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
+    if "closed_ts" in cols:
+        c.execute("SELECT COUNT(*) FROM trades WHERE slug = ? AND closed_ts IS NULL", (slug,))
+    else:
+        c.execute("SELECT COUNT(*) FROM trades WHERE slug = ?", (slug,))
     n = int(c.fetchone()[0] or 0)
     conn.close()
     return n
@@ -467,12 +471,12 @@ def main():
                 f"Round: {market.slug} | yes={market.yes_price:.3f} | buy_yes={buy_yes_px:.3f} | buy_no={buy_no_px:.3f} | {stext} | spread={spread} | depth={depth:.1f} | imbalance={imbalance:.2f}"
             )
 
-            round_count = entries_this_round(market.slug)
+            round_count = open_positions_this_round(market.slug)
             if round_count >= MAX_ENTRIES_PER_ROUND:
                 eta = eta_now
                 eta_safe = max(0, eta) if eta is not None else None
                 eta_txt = f" | next in {eta_safe}s" if eta_safe is not None else ""
-                print(f"Round: {market.slug} | No trade | round cap {round_count}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
+                print(f"Round: {market.slug} | No trade | open cap {round_count}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
 
                 # If pinned slug is already expired, roll to next round automatically.
                 if current_force_slug and AUTO_ROLL_FORCE_SLUG and eta is not None and eta < 0:
