@@ -571,11 +571,11 @@ def main():
                 print(f"₿ Signal | {btc_reason}", flush=True)
 
             base_force_slug = "" if USE_FILTER_ONLY else runtime_force_slug
-            if (not USE_FILTER_ONLY) and AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL:
+            # URL fallback can be used in both modes to recognize the live Polymarket page slug.
+            if AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL:
                 slug_from_url = _slug_from_event_url(CURRENT_EVENT_URL)
                 if slug_from_url:
-                    base_force_slug = slug_from_url
-
+                    base_force_slug = slug_from_url if USE_FILTER_ONLY else slug_from_url
             active_force_slug, step_eta = maybe_auto_step_force_slug(base_force_slug)
             runtime_force_slug = active_force_slug or runtime_force_slug
             slug_changed_this_loop = False
