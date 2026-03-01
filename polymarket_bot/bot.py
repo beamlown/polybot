@@ -63,6 +63,7 @@ AUTO_SLUG_FROM_URL = os.getenv("AUTO_SLUG_FROM_URL", "true").lower() == "true"
 CURRENT_EVENT_URL = os.getenv("CURRENT_EVENT_URL", "").strip()
 ROUND_MINUTES = _env_int("ROUND_MINUTES", 5)
 SERIES_PREFIX = os.getenv("SERIES_PREFIX", "btc-updown").lower()
+USE_FILTER_ONLY = os.getenv("USE_FILTER_ONLY", "true").lower() == "true"
 DEBUG_CANDIDATES = os.getenv("DEBUG_CANDIDATES", "true").lower() == "true"
 ENABLE_SLUG_PROMPT = os.getenv("ENABLE_SLUG_PROMPT", "true").lower() == "true"
 STEP_ON_MISS = os.getenv("STEP_ON_MISS", "true").lower() == "true"
@@ -569,8 +570,8 @@ def main():
                 btc_prob, btc_reason = get_btc_signal_prob()
                 print(f"₿ Signal | {btc_reason}", flush=True)
 
-            base_force_slug = runtime_force_slug
-            if AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL:
+            base_force_slug = "" if USE_FILTER_ONLY else runtime_force_slug
+            if (not USE_FILTER_ONLY) and AUTO_SLUG_FROM_URL and CURRENT_EVENT_URL:
                 slug_from_url = _slug_from_event_url(CURRENT_EVENT_URL)
                 if slug_from_url:
                     base_force_slug = slug_from_url
