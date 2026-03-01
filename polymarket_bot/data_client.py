@@ -42,6 +42,7 @@ class MarketClient:
         self.clob_pages = int(os.getenv("CLOB_MARKET_PAGES", "6"))
         self.round_minutes = int(os.getenv("ROUND_MINUTES", "5"))
         self.series_prefix = os.getenv("SERIES_PREFIX", "btc-updown").lower()
+        self.use_filter_only = os.getenv("USE_FILTER_ONLY", "true").lower() == "true"
 
     def _fetch_events(self) -> list[dict]:
         if self.force_event_slug:
@@ -215,6 +216,8 @@ class MarketClient:
             clob_markets = self._fetch_markets_clob()
             if clob_markets:
                 return clob_markets
+            if self.use_filter_only:
+                return []
 
         events = self._fetch_events()
         markets: List[Market] = []
@@ -262,6 +265,12 @@ class MarketClient:
                     except Exception:
                         if self.require_end_date:
                             continue
+
+                slug = str(m.get("slug") or event.get("slug") or "").lower()
+                qtext = str(m.get("question") or m.get("title") or event.get("title") or "").lower()
+                token = f"{self.series_prefix}-{self.round_minutes}m"
+                if self.use_filter_only and token not in f"{slug} {qtext}":
+                    continue
 
                 prices = self._parse_outcome_prices(m.get("outcomePrices"))
                 if not prices:
