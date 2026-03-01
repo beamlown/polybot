@@ -154,6 +154,10 @@ def realized_net_pnl() -> float:
         return 0.0
 
 
+def current_balance_realized_only() -> float:
+    return max(0.0, STARTING_BANKROLL + realized_net_pnl())
+
+
 def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
     if AUTO_TAKE_PROFIT_PCT <= 0:
         return 0
@@ -659,9 +663,10 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
-            risk = bankroll * RISK_PCT
+            balance_now = current_balance_realized_only()
+            risk = balance_now * RISK_PCT
             size = risk / max(entry, 1e-6)
-            note = f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f} source={entry_source}"
+            note = f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f} source={entry_source} bal={balance_now:.2f} risk={risk:.2f}"
             log_trade(market.slug, market.market_id, side, entry, size, edge, note, trade_token_id, entry_source)
             print(f"TRADE {side} | entry={entry:.4f} | size={size:.2f} | {note}")
 
