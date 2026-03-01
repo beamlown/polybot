@@ -24,6 +24,8 @@ AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
 MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
 STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
 MAX_HOLD_SECONDS = int(os.getenv("MAX_HOLD_SECONDS", "300"))
+SAME_SIDE_ENTRY_COOLDOWN_SECONDS = int(os.getenv("SAME_SIDE_ENTRY_COOLDOWN_SECONDS", "20"))
+MIN_REENTRY_PRICE_IMPROVEMENT = float(os.getenv("MIN_REENTRY_PRICE_IMPROVEMENT", "0.01"))
 STRONG_REGIME_ONLY = os.getenv("STRONG_REGIME_ONLY", "true").strip().lower() in ("1", "true", "yes", "on")
 BULL_MIN_VOTES = int(os.getenv("BULL_MIN_VOTES", "4"))
 BEAR_MAX_VOTES = int(os.getenv("BEAR_MAX_VOTES", "1"))
@@ -219,6 +221,49 @@ def parse_regime_votes(signal_text: str) -> tuple[str | None, int | None]:
     except Exception:
         return regime, votes
     return regime, votes
+
+
+def can_add_same_side_entry(slug: str, side: str, candidate_entry: float) -> tuple[bool, str]:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
+    where_open = " AND closed_ts IS NULL" if "closed_ts" in cols else ""
+
+    row = c.execute(
+        f"""
+        SELECT ts, entry
+        FROM trades
+        WHERE slug = ? AND side = ? {where_open}
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (slug, side),
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return True, ""
+
+    last_ts_raw, last_entry_raw = row
+    last_entry = float(last_entry_raw)
+
+    # Prevent rapid duplicate spam entries.
+    try:
+        last_ts = datetime.fromisoformat(str(last_ts_raw).replace("Z", "+00:00"))
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=UTC)
+        age = (datetime.now(UTC) - last_ts).total_seconds()
+        if age < SAME_SIDE_ENTRY_COOLDOWN_SECONDS:
+            return False, f"same-side cooldown {int(age)}s/{SAME_SIDE_ENTRY_COOLDOWN_SECONDS}s"
+    except Exception:
+        pass
+
+    # Require better re-entry price by at least configured improvement.
+    # Lower entry price is better for both YES and NO buys.
+    if candidate_entry > (last_entry - MIN_REENTRY_PRICE_IMPROVEMENT):
+        return False, f"reentry not improved (last={last_entry:.3f}, now={candidate_entry:.3f})"
+
+    return True, ""
 
 
 def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
@@ -573,6 +618,12 @@ def main():
             if not side:
                 regime_txt = f"regime={regime} votes={votes}" if regime is not None else "regime=n/a"
                 print(f"No trade | edge_yes={edge_yes:.4f} edge_no={edge_no:.4f} | {regime_txt}")
+                time.sleep(LOOP_SECONDS)
+                continue
+
+            allow_entry, block_reason = can_add_same_side_entry(market.slug, side, float(entry))
+            if not allow_entry:
+                print(f"No trade | {block_reason}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
