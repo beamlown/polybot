@@ -35,6 +35,8 @@ MIN_SIDE_ADVANTAGE = float(os.getenv("MIN_SIDE_ADVANTAGE", "0.02"))
 MAX_SAME_SIDE_OPEN_PER_ROUND = int(os.getenv("MAX_SAME_SIDE_OPEN_PER_ROUND", "2"))
 SIDE_PERF_LOOKBACK = int(os.getenv("SIDE_PERF_LOOKBACK", "30"))
 LOSING_SIDE_EDGE_PENALTY = float(os.getenv("LOSING_SIDE_EDGE_PENALTY", "0.03"))
+ENTRY_PRICE_FLOOR = float(os.getenv("ENTRY_PRICE_FLOOR", "0.08"))
+ENTRY_PRICE_CEIL = float(os.getenv("ENTRY_PRICE_CEIL", "0.92"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
@@ -684,6 +686,14 @@ def main():
                 continue
             if has_recent_stoploss(market.slug):
                 print(f"No trade | stop-loss cooldown active ({STOPLOSS_REENTRY_COOLDOWN_SECONDS}s)")
+                time.sleep(LOOP_SECONDS)
+                continue
+            if not (ENTRY_PRICE_FLOOR <= buy_yes_px <= ENTRY_PRICE_CEIL):
+                print(f"No trade | buy_yes out of range ({buy_yes_px:.3f})")
+                time.sleep(LOOP_SECONDS)
+                continue
+            if not (ENTRY_PRICE_FLOOR <= buy_no_px <= ENTRY_PRICE_CEIL):
+                print(f"No trade | buy_no out of range ({buy_no_px:.3f})")
                 time.sleep(LOOP_SECONDS)
                 continue
 
