@@ -1,4 +1,3 @@
-import math
 import requests
 
 
@@ -6,12 +5,33 @@ def _pct(a: float, b: float) -> float:
     return 0.0 if a <= 0 else (b - a) / a
 
 
-def _fetch(interval: str, limit: int):
+def _fetch_binance(interval: str, limit: int):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": "BTCUSDT", "interval": interval, "limit": limit}
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
     return [float(x[4]) for x in r.json()]
+
+
+def _fetch_coinbase(granularity: int, limit: int):
+    url = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+    params = {"granularity": granularity}
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
+    candles = list(reversed(r.json()))[-limit:]
+    return [float(c[4]) for c in candles]
+
+
+def _fetch(interval: str, limit: int):
+    # Binance first, Coinbase fallback (Binance can 451 by region)
+    try:
+        return _fetch_binance(interval, limit)
+    except Exception:
+        if interval == "1m":
+            return _fetch_coinbase(60, limit)
+        if interval == "5m":
+            return _fetch_coinbase(300, limit)
+        raise
 
 
 def get_prob_up() -> tuple[float | None, str]:

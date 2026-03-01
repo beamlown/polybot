@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, UTC
 
 from dotenv import load_dotenv
 
@@ -42,7 +42,7 @@ def init_db():
 def trades_today() -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    d = datetime.utcnow().date().isoformat()
+    d = datetime.now(UTC).date().isoformat()
     c.execute("SELECT COUNT(*) FROM trades WHERE ts LIKE ?", (f"{d}%",))
     n = int(c.fetchone()[0] or 0)
     conn.close()
@@ -54,7 +54,7 @@ def log_trade(slug, market_id, side, entry, size, note):
     c = conn.cursor()
     c.execute(
         "INSERT INTO trades (ts, slug, market_id, side, entry, size, note) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (datetime.utcnow().isoformat(), slug, market_id, side, entry, size, note),
+        (datetime.now(UTC).isoformat(), slug, market_id, side, entry, size, note),
     )
     conn.commit()
     conn.close()
