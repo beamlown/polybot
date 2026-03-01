@@ -20,6 +20,7 @@ FORCE_SLUG = os.getenv("V4_FORCE_SLUG", "").strip()
 AUTO_ROLL_FORCE_SLUG = os.getenv("AUTO_ROLL_FORCE_SLUG", "true").strip().lower() in ("1", "true", "yes", "on")
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
 AUTO_TAKE_PROFIT_PCT = float(os.getenv("AUTO_TAKE_PROFIT_PCT", "0"))
+AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
@@ -168,6 +169,50 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
     return closed
 
 
+def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
+    if AUTO_STOP_LOSS_PCT <= 0:
+        return 0
+
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    rows = c.execute(
+        """
+        SELECT id, side, entry, size
+        FROM trades
+        WHERE slug = ? AND closed_ts IS NULL
+        ORDER BY id ASC
+        """,
+        (slug,),
+    ).fetchall()
+
+    closed = 0
+    now_iso = datetime.now(UTC).isoformat()
+    for tid, side, entry, size in rows:
+        entry = float(entry)
+        size = float(size)
+        floor = entry * (1.0 - AUTO_STOP_LOSS_PCT)
+        close_price = None
+        if side == "BUY_YES" and sell_yes_px is not None and sell_yes_px <= floor:
+            close_price = sell_yes_px
+        elif side == "BUY_NO" and sell_no_px is not None and sell_no_px <= floor:
+            close_price = sell_no_px
+
+        if close_price is None:
+            continue
+
+        pnl = (float(close_price) - entry) * size
+        c.execute(
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+            (now_iso, float(close_price), "auto_stop_loss", float(pnl), int(tid)),
+        )
+        closed += 1
+        print(f"AUTO-SELL(STOP) id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f}")
+
+    conn.commit()
+    conn.close()
+    return closed
+
+
 def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None) -> int:
     if eta_seconds is None or eta_seconds > 0:
         return 0
@@ -283,6 +328,7 @@ def main():
             eta_now = seconds_to_next(market.slug, market.end_ts)
             maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px)
             maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px)
+            maybe_auto_stop_loss(market.slug, sell_yes_px, sell_no_px)
 
             print(
                 f"Round: {market.slug} | yes={market.yes_price:.3f} | buy_yes={buy_yes_px:.3f} | buy_no={buy_no_px:.3f} | {stext} | spread={spread} | depth={depth:.1f} | imbalance={imbalance:.2f}"
