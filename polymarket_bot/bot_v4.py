@@ -29,6 +29,7 @@ MIN_REENTRY_PRICE_IMPROVEMENT = float(os.getenv("MIN_REENTRY_PRICE_IMPROVEMENT",
 STRONG_REGIME_ONLY = os.getenv("STRONG_REGIME_ONLY", "true").strip().lower() in ("1", "true", "yes", "on")
 BULL_MIN_VOTES = int(os.getenv("BULL_MIN_VOTES", "4"))
 BEAR_MAX_VOTES = int(os.getenv("BEAR_MAX_VOTES", "1"))
+MIN_SIDE_ADVANTAGE = float(os.getenv("MIN_SIDE_ADVANTAGE", "0.02"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
@@ -622,13 +623,24 @@ def main():
                 long_allowed = (regime == "BULL" and votes >= BULL_MIN_VOTES)
                 short_allowed = (regime == "BEAR" and votes <= BEAR_MAX_VOTES)
 
-            if edge_yes >= MIN_EDGE and long_allowed:
+            yes_ok = edge_yes >= MIN_EDGE and long_allowed
+            no_ok = edge_no >= MIN_EDGE and short_allowed
+
+            # Avoid coin-flip entries: require one side to clearly dominate.
+            if yes_ok and no_ok and abs(edge_yes - edge_no) < MIN_SIDE_ADVANTAGE:
+                print(
+                    f"No trade | side advantage too small (edge_yes={edge_yes:.4f}, edge_no={edge_no:.4f}, min={MIN_SIDE_ADVANTAGE:.4f})"
+                )
+                time.sleep(LOOP_SECONDS)
+                continue
+
+            if yes_ok and (not no_ok or edge_yes >= edge_no):
                 side = "BUY_YES"
                 entry = buy_yes_px
                 edge = edge_yes
                 trade_token_id = market.yes_token_id
                 entry_source = "clob" if yes_best_ask is not None else "gamma"
-            elif edge_no >= MIN_EDGE and short_allowed:
+            elif no_ok:
                 side = "BUY_NO"
                 entry = buy_no_px
                 edge = edge_no
