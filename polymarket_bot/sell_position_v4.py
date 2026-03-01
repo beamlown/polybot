@@ -18,6 +18,8 @@ def ensure_close_columns(conn: sqlite3.Connection) -> None:
         c.execute("ALTER TABLE trades ADD COLUMN close_price REAL")
     if "close_note" not in cols:
         c.execute("ALTER TABLE trades ADD COLUMN close_note TEXT")
+    if "realized_pnl" not in cols:
+        c.execute("ALTER TABLE trades ADD COLUMN realized_pnl REAL")
     conn.commit()
 
 
@@ -49,6 +51,45 @@ def get_yes_price(slug: str) -> float | None:
     return None
 
 
+def fetch_open_trades(conn: sqlite3.Connection):
+    c = conn.cursor()
+    return c.execute(
+        """
+        SELECT id, ts, slug, side, entry, size
+        FROM trades
+        WHERE closed_ts IS NULL
+        ORDER BY id DESC
+        """
+    ).fetchall()
+
+
+def choose_trade(open_rows, arg_trade_id: int | None):
+    if not open_rows:
+        return None
+
+    if arg_trade_id is not None:
+        for r in open_rows:
+            if int(r[0]) == int(arg_trade_id):
+                return r
+        return None
+
+    print("Open trades:")
+    for i, r in enumerate(open_rows, start=1):
+        tid, ts, slug, side, entry, size = r
+        print(f" {i}) id={tid} | {slug} | {side} | entry={float(entry):.4f} | size={float(size):.2f}")
+
+    raw = input("Pick trade number to close (Enter = latest): ").strip()
+    if raw == "":
+        return open_rows[0]
+    try:
+        idx = int(raw)
+        if 1 <= idx <= len(open_rows):
+            return open_rows[idx - 1]
+    except Exception:
+        pass
+    return None
+
+
 def main() -> int:
     if not DB.exists():
         print("[SELL] trades_v4.db not found.")
@@ -56,42 +97,22 @@ def main() -> int:
 
     conn = sqlite3.connect(DB)
     ensure_close_columns(conn)
-    c = conn.cursor()
 
-    trade_id = None
+    arg_trade_id = None
     if len(sys.argv) > 1:
         try:
-            trade_id = int(sys.argv[1])
+            arg_trade_id = int(sys.argv[1])
         except Exception:
             pass
 
-    if trade_id is None:
-        row = c.execute(
-            """
-            SELECT id, ts, slug, side, entry, size
-            FROM trades
-            WHERE closed_ts IS NULL
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
-    else:
-        row = c.execute(
-            """
-            SELECT id, ts, slug, side, entry, size
-            FROM trades
-            WHERE id = ? AND closed_ts IS NULL
-            LIMIT 1
-            """,
-            (trade_id,),
-        ).fetchone()
-
-    if not row:
-        print("[SELL] No open trade found (or trade already closed).")
+    open_rows = fetch_open_trades(conn)
+    chosen = choose_trade(open_rows, arg_trade_id)
+    if not chosen:
+        print("[SELL] No valid open trade selected.")
         conn.close()
         return 1
 
-    tid, ts, slug, side, entry, size = row
+    tid, ts, slug, side, entry, size = chosen
     yes_now = get_yes_price(slug)
     if yes_now is None:
         print(f"[SELL] Could not fetch live price for {slug}.")
@@ -99,12 +120,21 @@ def main() -> int:
         return 1
 
     close_price = yes_now if side == "BUY_YES" else (1.0 - yes_now)
-    pnl = (close_price - float(entry)) * float(size)
-    now_iso = datetime.now(UTC).isoformat()
+    pnl = (float(close_price) - float(entry)) * float(size)
 
+    confirm = input(
+        f"Close id={tid} {side} @ current {close_price:.4f}? (y/N): "
+    ).strip().lower()
+    if confirm not in ("y", "yes"):
+        print("[SELL] Cancelled.")
+        conn.close()
+        return 1
+
+    now_iso = datetime.now(UTC).isoformat()
+    c = conn.cursor()
     c.execute(
-        "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ? WHERE id = ?",
-        (now_iso, float(close_price), "manual_sell", int(tid)),
+        "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+        (now_iso, float(close_price), "manual_sell", float(pnl), int(tid)),
     )
     conn.commit()
     conn.close()
