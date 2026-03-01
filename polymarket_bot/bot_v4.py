@@ -38,6 +38,9 @@ RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.03"))
 MIN_DEPTH_TOP5 = float(os.getenv("MIN_DEPTH_TOP5", "50"))
 LOOP_SECONDS = int(os.getenv("LOOP_SECONDS", "5"))
+MIN_SECONDS_TO_EXPIRY = int(os.getenv("MIN_SECONDS_TO_EXPIRY", "0"))
+ENTRY_WINDOW_START_SECONDS = int(os.getenv("ENTRY_WINDOW_START_SECONDS", "0"))
+ENTRY_WINDOW_END_SECONDS = int(os.getenv("ENTRY_WINDOW_END_SECONDS", "999999"))
 DB = "trades_v4.db"
 BUILD_TAG = "v4.2026-03-01.001"
 
@@ -600,9 +603,26 @@ def main():
             maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px)
             maybe_auto_stop_loss(market.slug, sell_yes_px, sell_no_px)
 
+            # Round timeline window guard
+            now_ts = int(datetime.now(UTC).timestamp())
+            try:
+                round_start_ts = int(str(market.slug).rsplit("-", 1)[-1])
+            except Exception:
+                round_start_ts = None
+            elapsed = (now_ts - round_start_ts) if round_start_ts is not None else None
+
             print(
-                f"Round: {market.slug} | yes={market.yes_price:.3f} | buy_yes={buy_yes_px:.3f} | buy_no={buy_no_px:.3f} | {stext} | spread={spread} | depth={depth:.1f} | imbalance={imbalance:.2f}"
+                f"Round: {market.slug} | yes={market.yes_price:.3f} | buy_yes={buy_yes_px:.3f} | buy_no={buy_no_px:.3f} | elapsed={elapsed}s | left={eta_now}s | {stext} | spread={spread} | depth={depth:.1f} | imbalance={imbalance:.2f}"
             )
+
+            if eta_now is not None and eta_now < MIN_SECONDS_TO_EXPIRY:
+                print(f"No trade | too close to expiry ({eta_now}s < {MIN_SECONDS_TO_EXPIRY}s)")
+                time.sleep(LOOP_SECONDS)
+                continue
+            if elapsed is not None and (elapsed < ENTRY_WINDOW_START_SECONDS or elapsed > ENTRY_WINDOW_END_SECONDS):
+                print(f"No trade | outside entry window ({elapsed}s, allowed {ENTRY_WINDOW_START_SECONDS}-{ENTRY_WINDOW_END_SECONDS}s)")
+                time.sleep(LOOP_SECONDS)
+                continue
 
             round_count = open_positions_this_round(market.slug)
             if round_count >= MAX_ENTRIES_PER_ROUND:
