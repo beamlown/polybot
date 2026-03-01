@@ -51,8 +51,11 @@ def get_mark_price(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> fl
     if m is None:
         return None
 
-    yes_price = to_float(m.get("lastTradePrice"), default=-1.0)
-    if yes_price < 0 or yes_price > 1:
+    yes_bid = to_float(m.get("bestBid"), default=-1.0)
+    yes_ask = to_float(m.get("bestAsk"), default=-1.0)
+    yes_last = to_float(m.get("lastTradePrice"), default=-1.0)
+
+    if (yes_last < 0 or yes_last > 1):
         op = m.get("outcomePrices")
         if isinstance(op, str):
             try:
@@ -61,11 +64,22 @@ def get_mark_price(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> fl
             except Exception:
                 op = None
         if isinstance(op, list) and op:
-            yes_price = to_float(op[0], default=-1.0)
+            yes_last = to_float(op[0], default=-1.0)
 
-    if not (0 <= yes_price <= 1):
+    # Mark at executable-ish side-aware price first; fallback to last trade.
+    if side == "BUY_YES":
+        if 0 <= yes_bid <= 1:
+            return yes_bid
+        if 0 <= yes_last <= 1:
+            return yes_last
         return None
-    return yes_price if side == "BUY_YES" else (1.0 - yes_price)
+
+    # BUY_NO -> NO value; NO bid approximated by (1 - YES ask)
+    if 0 <= yes_ask <= 1:
+        return 1.0 - yes_ask
+    if 0 <= yes_last <= 1:
+        return 1.0 - yes_last
+    return None
 
 
 if not DB.exists():

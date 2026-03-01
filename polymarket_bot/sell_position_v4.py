@@ -23,7 +23,7 @@ def ensure_close_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def get_yes_price(slug: str) -> float | None:
+def get_quote(slug: str) -> dict | None:
     try:
         r = requests.get(f"{GAMMA_API}/markets", params={"slug": slug, "limit": 1}, timeout=10)
         r.raise_for_status()
@@ -32,23 +32,37 @@ def get_yes_price(slug: str) -> float | None:
             return None
         m = data[0]
 
-        ltp = m.get("lastTradePrice")
-        if ltp is not None:
-            p = float(ltp)
-            if 0 <= p <= 1:
-                return p
+        best_bid = None
+        best_ask = None
+        yes_last = None
 
-        op = m.get("outcomePrices")
-        if isinstance(op, str):
-            import json
-            op = json.loads(op)
-        if isinstance(op, list) and op:
-            p = float(op[0])
-            if 0 <= p <= 1:
-                return p
+        try:
+            if m.get("bestBid") is not None:
+                best_bid = float(m.get("bestBid"))
+        except Exception:
+            pass
+        try:
+            if m.get("bestAsk") is not None:
+                best_ask = float(m.get("bestAsk"))
+        except Exception:
+            pass
+        try:
+            if m.get("lastTradePrice") is not None:
+                yes_last = float(m.get("lastTradePrice"))
+        except Exception:
+            pass
+
+        if yes_last is None:
+            op = m.get("outcomePrices")
+            if isinstance(op, str):
+                import json
+                op = json.loads(op)
+            if isinstance(op, list) and op:
+                yes_last = float(op[0])
+
+        return {"best_bid": best_bid, "best_ask": best_ask, "yes_last": yes_last}
     except Exception:
         return None
-    return None
 
 
 def fetch_open_trades(conn: sqlite3.Connection):
@@ -113,13 +127,28 @@ def main() -> int:
         return 1
 
     tid, ts, slug, side, entry, size = chosen
-    yes_now = get_yes_price(slug)
-    if yes_now is None:
-        print(f"[SELL] Could not fetch live price for {slug}.")
+    q = get_quote(slug)
+    if q is None:
+        print(f"[SELL] Could not fetch live quote for {slug}.")
         conn.close()
         return 1
 
-    close_price = yes_now if side == "BUY_YES" else (1.0 - yes_now)
+    # Use side-aware executable-ish quote (bid for what we are selling).
+    if side == "BUY_YES":
+        close_price = q.get("best_bid") if q.get("best_bid") is not None else q.get("yes_last")
+    else:
+        # Selling NO -> approximate NO bid as (1 - YES ask)
+        yes_ask = q.get("best_ask")
+        if yes_ask is not None:
+            close_price = 1.0 - float(yes_ask)
+        else:
+            yes_last = q.get("yes_last")
+            close_price = (1.0 - float(yes_last)) if yes_last is not None else None
+
+    if close_price is None:
+        print(f"[SELL] Could not derive close price for {slug}.")
+        conn.close()
+        return 1
     pnl = (float(close_price) - float(entry)) * float(size)
 
     confirm = input(
