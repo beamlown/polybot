@@ -20,6 +20,8 @@ FORCE_SLUG = os.getenv("V4_FORCE_SLUG", "").strip()
 AUTO_ROLL_FORCE_SLUG = os.getenv("AUTO_ROLL_FORCE_SLUG", "true").strip().lower() in ("1", "true", "yes", "on")
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
 AUTO_TAKE_PROFIT_PCT = float(os.getenv("AUTO_TAKE_PROFIT_PCT", "0"))
+PARTIAL_TP_TRIGGER_PCT = float(os.getenv("PARTIAL_TP_TRIGGER_PCT", "0.30"))
+PARTIAL_TP_SELL_FRACTION = float(os.getenv("PARTIAL_TP_SELL_FRACTION", "0.25"))
 AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
 MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
 STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
@@ -78,6 +80,11 @@ def init_db():
             c.execute("ALTER TABLE trades ADD COLUMN close_note TEXT")
         if "realized_pnl" not in cols:
             c.execute("ALTER TABLE trades ADD COLUMN realized_pnl REAL")
+        if "remaining_size" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN remaining_size REAL")
+            c.execute("UPDATE trades SET remaining_size = size WHERE remaining_size IS NULL")
+        if "partial_tp_done" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN partial_tp_done INTEGER DEFAULT 0")
 
         conn.commit()
         conn.close()
@@ -99,7 +106,9 @@ def open_positions_this_round(slug: str) -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
     cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
-    if "closed_ts" in cols:
+    if "closed_ts" in cols and "remaining_size" in cols:
+        c.execute("SELECT COUNT(*) FROM trades WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0", (slug,))
+    elif "closed_ts" in cols:
         c.execute("SELECT COUNT(*) FROM trades WHERE slug = ? AND closed_ts IS NULL", (slug,))
     else:
         c.execute("SELECT COUNT(*) FROM trades WHERE slug = ?", (slug,))
@@ -113,8 +122,8 @@ def log_trade(slug: str, market_id: str, side: str, entry: float, size: float, e
         conn = sqlite3.connect(DB)
         c = conn.cursor()
         c.execute(
-            "INSERT INTO trades (ts, slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (datetime.now(UTC).isoformat(), slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source),
+            "INSERT INTO trades (ts, slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, remaining_size, partial_tp_done) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.now(UTC).isoformat(), slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, size, 0),
         )
         conn.commit()
         conn.close()
@@ -165,9 +174,9 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, side, entry, size
+        SELECT id, side, entry, size, COALESCE(remaining_size, size) AS rem, COALESCE(partial_tp_done, 0) AS ptd
         FROM trades
-        WHERE slug = ? AND closed_ts IS NULL
+        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
         ORDER BY id ASC
         """,
         (slug,),
@@ -175,27 +184,40 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
 
     closed = 0
     now_iso = datetime.now(UTC).isoformat()
-    for tid, side, entry, size in rows:
+    for tid, side, entry, size, rem, ptd in rows:
         entry = float(entry)
-        size = float(size)
-        target = entry * (1.0 + AUTO_TAKE_PROFIT_PCT)
-        close_price = None
-        if side == "BUY_YES" and sell_yes_px is not None and sell_yes_px >= target:
-            close_price = sell_yes_px
-        elif side == "BUY_NO" and sell_no_px is not None and sell_no_px >= target:
-            close_price = sell_no_px
+        rem = float(rem)
 
+        close_price = sell_yes_px if side == "BUY_YES" else sell_no_px
         if close_price is None:
             continue
 
-        pnl = (float(close_price) - entry) * size
-        c.execute(
-            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
-            (now_iso, float(close_price), "auto_take_profit", float(pnl), int(tid)),
-        )
-        closed += 1
-        net = realized_net_pnl() + pnl
-        print(f"ALERT TAKE_PROFIT | id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
+        # 1) Mandatory partial at +30% (default)
+        partial_target = entry * (1.0 + PARTIAL_TP_TRIGGER_PCT)
+        if int(ptd) == 0 and close_price >= partial_target:
+            qty = max(0.0, rem * max(0.0, min(1.0, PARTIAL_TP_SELL_FRACTION)))
+            if qty > 0:
+                pnl_partial = (float(close_price) - entry) * qty
+                rem_after = max(0.0, rem - qty)
+                c.execute(
+                    "UPDATE trades SET remaining_size = ?, partial_tp_done = 1, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ? WHERE id = ?",
+                    (rem_after, "partial_take_profit", float(pnl_partial), int(tid)),
+                )
+                net = realized_net_pnl() + pnl_partial
+                print(f"ALERT PARTIAL_TP | id={tid} side={side} sold={qty:.2f}/{rem:.2f} close={float(close_price):.4f} pnl={pnl_partial:+.2f} net_realized~={net:+.2f}")
+                rem = rem_after
+
+        # 2) Full close remainder at standard TP
+        tp_target = entry * (1.0 + AUTO_TAKE_PROFIT_PCT)
+        if rem > 0 and close_price >= tp_target:
+            pnl = (float(close_price) - entry) * rem
+            c.execute(
+                "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
+                (now_iso, float(close_price), "auto_take_profit", float(pnl), int(tid)),
+            )
+            closed += 1
+            net = realized_net_pnl() + pnl
+            print(f"ALERT TAKE_PROFIT | id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
 
     conn.commit()
     conn.close()
@@ -295,9 +317,9 @@ def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, side, entry, size
+        SELECT id, side, entry, COALESCE(remaining_size, size) AS size
         FROM trades
-        WHERE slug = ? AND closed_ts IS NULL
+        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
         ORDER BY id ASC
         """,
         (slug,),
@@ -330,7 +352,7 @@ def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float
 
         pnl = (float(close_price) - entry) * size
         c.execute(
-            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
             (now_iso, float(close_price), "auto_stop_loss", float(pnl), int(tid)),
         )
         closed += 1
@@ -350,9 +372,9 @@ def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, side, entry, size
+        SELECT id, side, entry, COALESCE(remaining_size, size) AS size
         FROM trades
-        WHERE slug = ? AND closed_ts IS NULL
+        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
         ORDER BY id ASC
         """,
         (slug,),
@@ -368,7 +390,7 @@ def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_
             continue
         pnl = (float(close_price) - entry) * size
         c.execute(
-            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
             (now_iso, float(close_price), "round_expired_auto_close", float(pnl), int(tid)),
         )
         closed += 1
@@ -387,9 +409,9 @@ def maybe_close_any_expired_open_positions() -> int:
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, slug, side, entry, size
+        SELECT id, slug, side, entry, COALESCE(remaining_size, size) AS size
         FROM trades
-        WHERE closed_ts IS NULL
+        WHERE closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
         ORDER BY id ASC
         """
     ).fetchall()
@@ -412,7 +434,7 @@ def maybe_close_any_expired_open_positions() -> int:
         close_price = yes_px if side == "BUY_YES" else (1.0 - yes_px)
         pnl = (float(close_price) - float(entry)) * float(size)
         c.execute(
-            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
             (datetime.now(UTC).isoformat(), float(close_price), "expired_sweep_auto_close", float(pnl), int(tid)),
         )
         closed += 1
@@ -433,9 +455,9 @@ def maybe_auto_close_stale_positions() -> int:
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, ts, slug, side, entry, size
+        SELECT id, ts, slug, side, entry, COALESCE(remaining_size, size) AS size
         FROM trades
-        WHERE closed_ts IS NULL
+        WHERE closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
         ORDER BY id ASC
         """
     ).fetchall()
@@ -461,7 +483,7 @@ def maybe_auto_close_stale_positions() -> int:
         close_price = yes_px if side == "BUY_YES" else (1.0 - yes_px)
         pnl = (float(close_price) - float(entry)) * float(size)
         c.execute(
-            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
             (now.isoformat(), float(close_price), "max_hold_auto_close", float(pnl), int(tid)),
         )
         closed += 1
