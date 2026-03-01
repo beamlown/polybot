@@ -138,6 +138,21 @@ def trades_taken_on_slug(slug: str) -> int:
     return n
 
 
+def open_positions_total() -> int:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
+    if "closed_ts" in cols and "remaining_size" in cols:
+        q = "SELECT COUNT(*) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0"
+    elif "closed_ts" in cols:
+        q = "SELECT COUNT(*) FROM trades WHERE closed_ts IS NULL"
+    else:
+        q = "SELECT COUNT(*) FROM trades"
+    n = int(c.execute(q).fetchone()[0] or 0)
+    conn.close()
+    return n
+
+
 def open_positions_this_round(slug: str) -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -760,7 +775,35 @@ def main():
                 continue
 
             candidates.sort(key=lambda x: x[0], reverse=True)
-            _, chosen_prefix, market, book = candidates[0]
+            available_slots = max(0, MAX_CONCURRENT_TRADES - open_positions_total())
+            if available_slots <= 0:
+                print(f"SELECTED | n=0 reason=no_available_slots max_concurrent={MAX_CONCURRENT_TRADES}")
+                time.sleep(LOOP_SECONDS)
+                continue
+
+            selected = []
+            used_keys = set()
+            for score, pref, mkt, bok in candidates:
+                key = (pref, mkt.suffix)
+                if key in used_keys:
+                    continue
+                if trades_taken_on_slug(mkt.slug) >= MAX_TRADES_PER_SLUG:
+                    continue
+                selected.append((score, pref, mkt, bok))
+                used_keys.add(key)
+                if len(selected) >= available_slots:
+                    break
+
+            if not selected:
+                print("SELECTED | n=0 reason=all_candidates_blocked_by_slug_cap_or_keys")
+                time.sleep(LOOP_SECONDS)
+                continue
+
+            picked_txt = ", ".join([f"{x[1]}:{x[2].slug}:{x[0]:.1f}" for x in selected])
+            print(f"SELECTED | n={len(selected)} -> {picked_txt}")
+
+            # Current execution path processes one candidate per loop (highest-ranked selected).
+            _, chosen_prefix, market, book = selected[0]
 
             if market.slug != last_logged_slug:
                 print(
