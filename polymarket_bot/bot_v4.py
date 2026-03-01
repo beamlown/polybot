@@ -237,18 +237,28 @@ def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float
         (slug,),
     ).fetchall()
 
+    # If any position on a side trips stop-loss, close ALL open positions on that side for this slug.
+    stop_yes = False
+    stop_no = False
+    for _, side, entry, _ in rows:
+        entry = float(entry)
+        floor = entry * (1.0 - AUTO_STOP_LOSS_PCT)
+        if side == "BUY_YES" and sell_yes_px is not None and sell_yes_px <= floor:
+            stop_yes = True
+        elif side == "BUY_NO" and sell_no_px is not None and sell_no_px <= floor:
+            stop_no = True
+
     closed = 0
     now_iso = datetime.now(UTC).isoformat()
     for tid, side, entry, size in rows:
+        if side == "BUY_YES" and not stop_yes:
+            continue
+        if side == "BUY_NO" and not stop_no:
+            continue
+
         entry = float(entry)
         size = float(size)
-        floor = entry * (1.0 - AUTO_STOP_LOSS_PCT)
-        close_price = None
-        if side == "BUY_YES" and sell_yes_px is not None and sell_yes_px <= floor:
-            close_price = sell_yes_px
-        elif side == "BUY_NO" and sell_no_px is not None and sell_no_px <= floor:
-            close_price = sell_no_px
-
+        close_price = sell_yes_px if side == "BUY_YES" else sell_no_px
         if close_price is None:
             continue
 
