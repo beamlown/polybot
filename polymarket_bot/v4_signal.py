@@ -67,7 +67,7 @@ def _rsi(values: list[float], period: int = 14) -> float:
 def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
     try:
         c1 = _series("1m", 60)
-        c5 = _series("5m", 25)
+        c5 = _series("5m", 100)
     except Exception as e:
         return None, None, fmt(E_SIGNAL_HTTP, f"price source failed: {e}")
 
