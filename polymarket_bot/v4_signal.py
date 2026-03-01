@@ -77,6 +77,21 @@ def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
         m1_slow = _pct(c1[-16], c1[-1])
         m5 = _pct(c5[-4], c5[-1])
 
+        # Last-10 candle structure (1m): breadth + body pressure
+        last10 = c1[-10:]
+        up_candles = 0
+        down_candles = 0
+        body_sum = 0.0
+        for i in range(1, len(last10)):
+            d = last10[i] - last10[i - 1]
+            body_sum += d
+            if d >= 0:
+                up_candles += 1
+            else:
+                down_candles += 1
+        candle_breadth = (up_candles - down_candles) / max(1, (up_candles + down_candles))
+        candle_body_bias = body_sum / max(1e-9, last10[0])
+
         # Trend state via EMA spread on 1m
         ema9 = _ema(c1[-20:], 9)
         ema21 = _ema(c1[-30:], 21)
@@ -88,11 +103,13 @@ def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
 
         # Composite score
         score = (
-            (m1_fast * 0.40)
-            + (m1_slow * 0.20)
-            + (m5 * 0.20)
+            (m1_fast * 0.30)
+            + (m1_slow * 0.15)
+            + (m5 * 0.15)
             + (ema_spread * 0.15)
             + (rsi_bias * 0.05)
+            + (candle_breadth * 0.12)
+            + (candle_body_bias * 0.08)
         )
 
         prob = 0.5 + max(-0.30, min(0.30, score * 65.0))
@@ -105,16 +122,20 @@ def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
         bull_votes += 1 if m5 > 0 else 0
         bull_votes += 1 if ema_spread > 0 else 0
         bull_votes += 1 if rsi14 > 50 else 0
+        bull_votes += 1 if candle_breadth > 0 else 0
+        bull_votes += 1 if candle_body_bias > 0 else 0
 
-        regime = "BULL" if bull_votes >= 4 else ("BEAR" if bull_votes <= 1 else "MIXED")
+        regime = "BULL" if bull_votes >= 5 else ("BEAR" if bull_votes <= 2 else "MIXED")
 
         text = (
-            f"regime={regime} votes={bull_votes}/5"
+            f"regime={regime} votes={bull_votes}/7"
             f" | m1_fast={m1_fast:.3%}"
             f" | m1_slow={m1_slow:.3%}"
             f" | m5={m5:.3%}"
             f" | ema9-21={ema_spread:.3%}"
             f" | rsi14={rsi14:.1f}"
+            f" | last10_up={up_candles} down={down_candles}"
+            f" | last10_body={candle_body_bias:.3%}"
             f" | up_chance={prob*100:.1f}%"
         )
         return prob, text, None
