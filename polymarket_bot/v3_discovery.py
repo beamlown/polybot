@@ -39,7 +39,7 @@ def _slug_suffix(slug: str) -> int:
         return 0
 
 
-def discover_latest_market(series_prefix: str = "btc-updown", round_minutes: int = 5) -> Optional[V3Market]:
+def discover_latest_market(series_prefix: str = "btc-updown", round_minutes: int = 5, force_slug: str | None = None) -> Optional[V3Market]:
     token = f"{series_prefix}-{round_minutes}m"
     resp = requests.get(
         f"{GAMMA_API}/markets",
@@ -58,12 +58,20 @@ def discover_latest_market(series_prefix: str = "btc-updown", round_minutes: int
         return None
 
     out = []
+    force_slug_l = (force_slug or "").lower().strip()
+
     for m in markets:
         slug = str(m.get("slug") or "")
         question = str(m.get("question") or "")
-        blob = f"{slug.lower()} {question.lower()}"
-        if token not in blob:
-            continue
+        slug_l = slug.lower()
+        blob = f"{slug_l} {question.lower()}"
+
+        if force_slug_l:
+            if slug_l != force_slug_l:
+                continue
+        else:
+            if token not in blob:
+                continue
 
         outcome_prices = m.get("outcomePrices")
         if isinstance(outcome_prices, str):

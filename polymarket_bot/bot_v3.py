@@ -14,6 +14,7 @@ load_dotenv()
 STARTING_BANKROLL = float(os.getenv("STARTING_BANKROLL", "2000"))
 SERIES_PREFIX = os.getenv("SERIES_PREFIX", "btc-updown")
 ROUND_MINUTES = int(os.getenv("ROUND_MINUTES", "5"))
+V3_FORCE_SLUG = os.getenv("V3_FORCE_SLUG", "").strip()
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
@@ -102,7 +103,7 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
-            m = discover_latest_market(SERIES_PREFIX, ROUND_MINUTES)
+            m = discover_latest_market(SERIES_PREFIX, ROUND_MINUTES, force_slug=V3_FORCE_SLUG or None)
             if not m:
                 print("No matching round market visible yet. waiting...")
                 time.sleep(LOOP_SECONDS)
