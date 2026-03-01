@@ -13,6 +13,7 @@ except Exception:
 DB = Path(__file__).parent / "trades_v4.db"
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOSED_HIDE_AFTER_SECONDS = 300
+STARTING_BANKROLL = 2000.0
 
 RST = "\033[0m"
 GRN = "\033[92m"
@@ -175,6 +176,17 @@ rows = cursor.execute(select_sql).fetchall()
 count = int(cursor.execute("SELECT COUNT(*) FROM trades").fetchone()[0] or 0)
 conn.close()
 
+# Load starting bankroll from .env if available
+try:
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.strip().startswith("STARTING_BANKROLL="):
+                STARTING_BANKROLL = float(line.split("=", 1)[1].strip() or "2000")
+                break
+except Exception:
+    pass
+
 market_cache: Dict[str, Dict[str, Any]] = {}
 clob = ClobClient("https://clob.polymarket.com", chain_id=137) if ClobClient is not None else None
 
@@ -274,6 +286,9 @@ rt_color = GRN if realized_total >= 0 else RED
 ut_color = GRN if open_unrealized_total >= 0 else RED
 print(f"Realized PnL:   {c(f'{realized_total:+.2f}', rt_color)}")
 print(f"Unrealized PnL: {c(f'{open_unrealized_total:+.2f}', ut_color)} (priced open rows={priced_open_rows})")
-print(f"Net PnL:        {c(f'{realized_total + open_unrealized_total:+.2f}', GRN if realized_total + open_unrealized_total >= 0 else RED)}")
+net_pnl = realized_total + open_unrealized_total
+est_balance = STARTING_BANKROLL + net_pnl
+print(f"Net PnL:        {c(f'{net_pnl:+.2f}', GRN if net_pnl >= 0 else RED)}")
+print(f"Est. Balance:   {c(f'${est_balance:,.2f}', GRN if est_balance >= STARTING_BANKROLL else RED)} (start=${STARTING_BANKROLL:,.2f})")
 print(c(f"Closed rows older than {CLOSED_HIDE_AFTER_SECONDS}s are hidden from this live screen.", WHT))
 print(c("Tip: use sell_position_v4.bat to pick and close a specific open trade.", WHT))
