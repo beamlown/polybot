@@ -148,14 +148,19 @@ def main():
                 continue
 
             book, berr = ob.read(market.yes_token_id)
+            spread = None
+            depth = 0.0
+            imbalance = 0.0
             if berr:
-                print(berr)
-                time.sleep(LOOP_SECONDS)
-                continue
-
-            spread = book.spread
-            depth = book.depth_top5
-            imbalance = book.imbalance
+                # Fallback to Gamma quoted spread/bid/ask when CLOB book is unavailable for token id.
+                spread = market.gamma_spread
+                if market.best_bid is not None and market.best_ask is not None:
+                    depth = 9999.0  # treat as available quote depth proxy
+                print(f"{berr} | fallback=gamma_quotes spread={spread} best_bid={market.best_bid} best_ask={market.best_ask}")
+            else:
+                spread = book.spread
+                depth = book.depth_top5
+                imbalance = book.imbalance
 
             print(
                 f"Round: {market.slug} | yes={market.yes_price:.3f} | {stext} | spread={spread} | depth={depth:.1f} | imbalance={imbalance:.2f}"

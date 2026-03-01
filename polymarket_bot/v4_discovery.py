@@ -20,6 +20,9 @@ class MarketRound:
     yes_token_id: Optional[str]
     no_token_id: Optional[str]
     suffix: int
+    best_bid: Optional[float]
+    best_ask: Optional[float]
+    gamma_spread: Optional[float]
 
 
 def _suffix(slug: str) -> int:
@@ -44,21 +47,33 @@ def _token_ids(raw) -> tuple[Optional[str], Optional[str]]:
 
 def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] = None) -> tuple[Optional[MarketRound], Optional[str]]:
     token = f"{series_prefix}-{round_minutes}m"
+    force = (force_slug or "").strip().lower()
 
     try:
-        r = requests.get(
-            f"{GAMMA_API}/markets",
-            params={
-                "limit": 600,
-                "active": "true",
-                "closed": "false",
-                "order": "startDate",
-                "ascending": "false",
-            },
-            timeout=20,
-        )
-        r.raise_for_status()
-        data = r.json()
+        # If user pins a slug, query that exact slug directly first.
+        if force:
+            r = requests.get(
+                f"{GAMMA_API}/markets",
+                params={"slug": force, "limit": 10, "active": "true", "closed": "false"},
+                timeout=20,
+            )
+            r.raise_for_status()
+            data = r.json()
+        else:
+            # Notebook-style discovery: active/open markets sorted by volume.
+            r = requests.get(
+                f"{GAMMA_API}/markets",
+                params={
+                    "limit": 600,
+                    "active": "true",
+                    "closed": "false",
+                    "order": "volume24hr",
+                    "ascending": "false",
+                },
+                timeout=20,
+            )
+            r.raise_for_status()
+            data = r.json()
     except Exception as e:
         return None, fmt(E_DISCOVERY_HTTP, f"gamma /markets request failed: {e}")
 
@@ -66,7 +81,6 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
         return None, fmt(E_DISCOVERY_PARSE, "gamma /markets returned non-list payload")
 
     out = []
-    force = (force_slug or "").strip().lower()
     total_markets = len(data)
     token_candidates = 0
     seen_slugs: list[str] = []
@@ -111,7 +125,26 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
                 if abs(sfx - cur_bucket) > (interval * 2):
                     continue
 
-            out.append(MarketRound(slug, market_id, q, yes, 1 - yes, yes_id, no_id, sfx))
+            best_bid = None
+            best_ask = None
+            gamma_spread = None
+            try:
+                if m.get("bestBid") is not None:
+                    best_bid = float(m.get("bestBid"))
+            except Exception:
+                pass
+            try:
+                if m.get("bestAsk") is not None:
+                    best_ask = float(m.get("bestAsk"))
+            except Exception:
+                pass
+            try:
+                if m.get("spread") is not None:
+                    gamma_spread = float(m.get("spread"))
+            except Exception:
+                pass
+
+            out.append(MarketRound(slug, market_id, q, yes, 1 - yes, yes_id, no_id, sfx, best_bid, best_ask, gamma_spread))
         except Exception:
             continue
 
