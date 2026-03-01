@@ -20,6 +20,7 @@ FORCE_SLUG = os.getenv("V4_FORCE_SLUG", "").strip()
 AUTO_ROLL_FORCE_SLUG = os.getenv("AUTO_ROLL_FORCE_SLUG", "true").strip().lower() in ("1", "true", "yes", "on")
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
 AUTO_TAKE_PROFIT_PCT = float(os.getenv("AUTO_TAKE_PROFIT_PCT", "0"))
+AUTO_TAKE_PROFIT_ABS = float(os.getenv("AUTO_TAKE_PROFIT_ABS", "0.65"))
 PARTIAL_TP_TRIGGER_PCT = float(os.getenv("PARTIAL_TP_TRIGGER_PCT", "0.30"))
 PARTIAL_TP_SELL_FRACTION = float(os.getenv("PARTIAL_TP_SELL_FRACTION", "0.25"))
 GROUP_TAKE_PROFIT_PCT = float(os.getenv("GROUP_TAKE_PROFIT_PCT", "0.30"))
@@ -224,9 +225,10 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
                 print(f"ALERT PARTIAL_TP | id={tid} side={side} sold={qty:.2f}/{rem:.2f} close={float(close_price):.4f} pnl={pnl_partial:+.2f} net_realized~={net:+.2f}")
                 rem = rem_after
 
-        # 2) Full close remainder at standard TP
+        # 2) Full close remainder at standard TP or absolute price target.
         tp_target = entry * (1.0 + AUTO_TAKE_PROFIT_PCT)
-        if rem > 0 and close_price >= tp_target:
+        abs_target_hit = (AUTO_TAKE_PROFIT_ABS > 0 and close_price >= AUTO_TAKE_PROFIT_ABS)
+        if rem > 0 and (close_price >= tp_target or abs_target_hit):
             pnl = (float(close_price) - entry) * rem
             c.execute(
                 "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
