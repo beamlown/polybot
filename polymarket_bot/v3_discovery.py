@@ -1,4 +1,5 @@
 import json
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -100,5 +101,14 @@ def discover_latest_market(series_prefix: str = "btc-updown", round_minutes: int
     if not out:
         return None
 
-    out.sort(key=lambda x: _slug_suffix(x.slug), reverse=True)
-    return out[0]
+    # Freshness guard: keep rounds near current wall-clock bucket.
+    now_ts = int(time.time())
+    interval = max(60, round_minutes * 60)
+    current_bucket = (now_ts // interval) * interval
+    max_drift = interval * 2  # within +/- 2 rounds
+
+    near = [m for m in out if abs(_slug_suffix(m.slug) - current_bucket) <= max_drift]
+    target = near if near else out
+
+    target.sort(key=lambda x: _slug_suffix(x.slug), reverse=True)
+    return target[0]
