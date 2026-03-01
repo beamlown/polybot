@@ -67,6 +67,9 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
 
     out = []
     force = (force_slug or "").strip().lower()
+    total_markets = len(data)
+    token_candidates = 0
+    seen_slugs: list[str] = []
 
     for m in data:
         try:
@@ -74,12 +77,15 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             slug_l = slug.lower()
             q = str(m.get("question") or "")
             blob = f"{slug_l} {q.lower()}"
+            seen_slugs.append(slug)
 
             if force:
                 if slug_l != force:
                     continue
             elif token not in blob:
                 continue
+
+            token_candidates += 1
 
             op = m.get("outcomePrices")
             if isinstance(op, str):
@@ -110,7 +116,26 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             continue
 
     if not out:
-        return None, fmt(E_DISCOVERY_NONE, "no matching active round found")
+        nearby = []
+        now = int(time.time())
+        interval = max(60, round_minutes * 60)
+        cur_bucket = (now // interval) * interval
+
+        for s in seen_slugs:
+            sfx = _suffix(s)
+            if sfx > 0:
+                nearby.append((abs(sfx - cur_bucket), s))
+
+        nearby.sort(key=lambda x: x[0])
+        closest = [x[1] for x in nearby[:5]]
+        force_found = (force in [s.lower() for s in seen_slugs]) if force else False
+
+        detail = (
+            f"no matching active round found | total_markets={total_markets} "
+            f"| token_candidates={token_candidates} | force_slug={force or 'none'} "
+            f"| force_found={force_found} | closest_slugs={closest}"
+        )
+        return None, fmt(E_DISCOVERY_NONE, detail)
 
     out.sort(key=lambda x: x.suffix, reverse=True)
     return out[0], None
