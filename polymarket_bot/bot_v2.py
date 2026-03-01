@@ -13,6 +13,7 @@ load_dotenv()
 STARTING_BANKROLL = float(os.getenv("STARTING_BANKROLL", "2000"))
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
+MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
 LOOP_SECONDS = int(os.getenv("LOOP_SECONDS", "5"))
 SERIES_PREFIX = os.getenv("SERIES_PREFIX", "btc-updown")
@@ -44,6 +45,15 @@ def trades_today() -> int:
     c = conn.cursor()
     d = datetime.now(UTC).date().isoformat()
     c.execute("SELECT COUNT(*) FROM trades WHERE ts LIKE ?", (f"{d}%",))
+    n = int(c.fetchone()[0] or 0)
+    conn.close()
+    return n
+
+
+def entries_this_round(slug: str) -> int:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM trades WHERE slug = ?", (slug,))
     n = int(c.fetchone()[0] or 0)
     conn.close()
     return n
@@ -89,6 +99,12 @@ def main():
 
             edge_yes = prob - m.yes_price
             edge_no = m.yes_price - prob
+
+            round_entries = entries_this_round(m.slug)
+            if round_entries >= MAX_ENTRIES_PER_ROUND:
+                print(f"No trade | round entry cap reached ({round_entries}/{MAX_ENTRIES_PER_ROUND})")
+                time.sleep(LOOP_SECONDS)
+                continue
 
             side = None
             entry = None
