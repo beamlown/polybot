@@ -23,6 +23,8 @@ AUTO_TAKE_PROFIT_PCT = float(os.getenv("AUTO_TAKE_PROFIT_PCT", "0"))
 PARTIAL_TP_TRIGGER_PCT = float(os.getenv("PARTIAL_TP_TRIGGER_PCT", "0.30"))
 PARTIAL_TP_SELL_FRACTION = float(os.getenv("PARTIAL_TP_SELL_FRACTION", "0.25"))
 GROUP_TAKE_PROFIT_PCT = float(os.getenv("GROUP_TAKE_PROFIT_PCT", "0.30"))
+BREAKEVEN_AFTER_PARTIAL = os.getenv("BREAKEVEN_AFTER_PARTIAL", "true").strip().lower() in ("1", "true", "yes", "on")
+BREAKEVEN_BUFFER_PCT = float(os.getenv("BREAKEVEN_BUFFER_PCT", "0.01"))
 AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
 MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
 STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
@@ -432,7 +434,7 @@ def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, side, entry, COALESCE(remaining_size, size) AS size
+        SELECT id, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done, 0) AS ptd
         FROM trades
         WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
         ORDER BY id ASC
@@ -443,9 +445,11 @@ def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float
     # If any position on a side trips stop-loss, close ALL open positions on that side for this slug.
     stop_yes = False
     stop_no = False
-    for _, side, entry, _ in rows:
+    for _, side, entry, _, ptd in rows:
         entry = float(entry)
         floor = entry * (1.0 - AUTO_STOP_LOSS_PCT)
+        if BREAKEVEN_AFTER_PARTIAL and int(ptd) == 1:
+            floor = max(floor, entry * (1.0 + BREAKEVEN_BUFFER_PCT))
         if side == "BUY_YES" and sell_yes_px is not None and sell_yes_px <= floor:
             stop_yes = True
         elif side == "BUY_NO" and sell_no_px is not None and sell_no_px <= floor:
@@ -453,7 +457,7 @@ def maybe_auto_stop_loss(slug: str, sell_yes_px: float | None, sell_no_px: float
 
     closed = 0
     now_iso = datetime.now(UTC).isoformat()
-    for tid, side, entry, size in rows:
+    for tid, side, entry, size, ptd in rows:
         if side == "BUY_YES" and not stop_yes:
             continue
         if side == "BUY_NO" and not stop_no:
