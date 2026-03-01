@@ -94,8 +94,7 @@ def log_trade(slug: str, market_id: str, side: str, entry: float, size: float, e
 
 def seconds_to_next(slug: str, end_ts: int | None = None) -> int | None:
     try:
-        if end_ts is not None:
-            return end_ts - int(datetime.now(UTC).timestamp())
+        # Use slug bucket timing for 5m rounds (Gamma endDate can point to series/event horizon).
         sfx = int(slug.rsplit("-", 1)[-1])
         return (sfx + ROUND_MINUTES * 60) - int(datetime.now(UTC).timestamp())
     except Exception:

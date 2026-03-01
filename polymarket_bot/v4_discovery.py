@@ -141,13 +141,9 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
             if sfx <= 0:
                 continue
 
-            # Keep only markets that are live right now when timestamps are available.
+            # Parse optional timestamps for diagnostics only.
             start_ts = _parse_iso_ts(m.get("startDateIso") or m.get("startDate"))
             end_ts = _parse_iso_ts(m.get("endDateIso") or m.get("endDate"))
-            now_ts = int(time.time())
-            if start_ts is not None and end_ts is not None:
-                if not (start_ts <= now_ts <= end_ts):
-                    continue
 
             best_bid = None
             best_ask = None
@@ -199,9 +195,24 @@ def discover(series_prefix: str, round_minutes: int, force_slug: Optional[str] =
         out.sort(key=lambda x: x.suffix, reverse=True)
         return out[0], None
 
-    # Prefer round closest to current time bucket for fast 5m products.
+    # Prefer rounds near current time bucket and reject day-away buckets.
     now = int(time.time())
     interval = max(60, round_minutes * 60)
     cur_bucket = (now // interval) * interval
-    out.sort(key=lambda x: (abs(x.suffix - cur_bucket), -x.suffix))
-    return out[0], None
+    max_distance = interval * 6  # keep within ~30 minutes for 5m rounds
+
+    near = [m for m in out if abs(m.suffix - cur_bucket) <= max_distance]
+    target = near if near else []
+
+    if not target:
+        nearby = sorted([(abs(m.suffix - cur_bucket), m.slug) for m in out], key=lambda x: x[0])[:5]
+        closest = [x[1] for x in nearby]
+        detail = (
+            f"no matching active round found | total_markets={total_markets} "
+            f"| token_candidates={token_candidates} | force_slug=none | force_found=False "
+            f"| closest_slugs={closest}"
+        )
+        return None, fmt(E_DISCOVERY_NONE, detail)
+
+    target.sort(key=lambda x: (abs(x.suffix - cur_bucket), -x.suffix))
+    return target[0], None
