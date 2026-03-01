@@ -719,7 +719,11 @@ def main():
                 yes_ask = book.best_ask
                 top_bid_usd = (yes_bid or 0.0) * 100.0
                 top_ask_usd = (yes_ask or 0.0) * 100.0
-                vol_ok = (market.volume24h is None) or (market.volume24h >= MIN_VOLUME24H)
+                # Volume gate is optional; when disabled (<=0) rely on execution quality gates.
+                if MIN_VOLUME24H <= 0:
+                    vol_ok = True
+                else:
+                    vol_ok = (market.volume24h is None) or (market.volume24h >= MIN_VOLUME24H)
 
                 gate_ok = (
                     (spread is not None and spread <= MAX_SPREAD)
@@ -741,7 +745,7 @@ def main():
 
                 print(
                     f"CANDIDATE | prefix={pref} slug={market.slug} suffix={market.suffix} market_id={market.market_id} "
-                    f"bid={yes_bid} ask={yes_ask} spread={spread} depth={depth:.1f} gate={gate_ok} reason={fail_reason or 'ok'}"
+                    f"bid={yes_bid} ask={yes_ask} spread={spread} depth={depth:.1f} vol24h={market.volume24h} gate={gate_ok} reason={fail_reason or 'ok'}"
                 )
 
                 if gate_ok:
