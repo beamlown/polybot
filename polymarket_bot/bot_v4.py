@@ -19,6 +19,7 @@ ROUND_MINUTES = int(os.getenv("ROUND_MINUTES", "5"))
 FORCE_SLUG = os.getenv("V4_FORCE_SLUG", "").strip()
 AUTO_ROLL_FORCE_SLUG = os.getenv("AUTO_ROLL_FORCE_SLUG", "true").strip().lower() in ("1", "true", "yes", "on")
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.05"))
+AUTO_TAKE_PROFIT_PCT = float(os.getenv("AUTO_TAKE_PROFIT_PCT", "0"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
@@ -59,6 +60,14 @@ def init_db():
             c.execute("ALTER TABLE trades ADD COLUMN trade_token_id TEXT")
         if "entry_source" not in cols:
             c.execute("ALTER TABLE trades ADD COLUMN entry_source TEXT")
+        if "closed_ts" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN closed_ts TEXT")
+        if "close_price" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN close_price REAL")
+        if "close_note" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN close_note TEXT")
+        if "realized_pnl" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN realized_pnl REAL")
 
         conn.commit()
         conn.close()
@@ -116,6 +125,49 @@ def _advance_slug_once(slug: str) -> str:
         return slug
 
 
+def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
+    if AUTO_TAKE_PROFIT_PCT <= 0:
+        return 0
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    rows = c.execute(
+        """
+        SELECT id, side, entry, size
+        FROM trades
+        WHERE slug = ? AND closed_ts IS NULL
+        ORDER BY id ASC
+        """,
+        (slug,),
+    ).fetchall()
+
+    closed = 0
+    now_iso = datetime.now(UTC).isoformat()
+    for tid, side, entry, size in rows:
+        entry = float(entry)
+        size = float(size)
+        target = entry * (1.0 + AUTO_TAKE_PROFIT_PCT)
+        close_price = None
+        if side == "BUY_YES" and sell_yes_px is not None and sell_yes_px >= target:
+            close_price = sell_yes_px
+        elif side == "BUY_NO" and sell_no_px is not None and sell_no_px >= target:
+            close_price = sell_no_px
+
+        if close_price is None:
+            continue
+
+        pnl = (float(close_price) - entry) * size
+        c.execute(
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = ? WHERE id = ?",
+            (now_iso, float(close_price), "auto_take_profit", float(pnl), int(tid)),
+        )
+        closed += 1
+        print(f"AUTO-SELL id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f}")
+
+    conn.commit()
+    conn.close()
+    return closed
+
+
 def main():
     if ROUND_MINUTES <= 0:
         die(E_CONFIG, "ROUND_MINUTES must be > 0")
@@ -162,23 +214,6 @@ def main():
                 )
                 last_logged_slug = market.slug
 
-            round_count = entries_this_round(market.slug)
-            if round_count >= MAX_ENTRIES_PER_ROUND:
-                eta = seconds_to_next(market.slug, market.end_ts)
-                eta_safe = max(0, eta) if eta is not None else None
-                eta_txt = f" | next in {eta_safe}s" if eta_safe is not None else ""
-                print(f"Round: {market.slug} | No trade | round cap {round_count}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
-
-                # If pinned slug is already expired, roll to next round automatically.
-                if current_force_slug and AUTO_ROLL_FORCE_SLUG and eta is not None and eta < 0:
-                    nxt = _advance_slug_once(current_force_slug)
-                    if nxt != current_force_slug:
-                        current_force_slug = nxt
-                        print(f"Auto-rolled forced slug -> {current_force_slug}")
-
-                time.sleep(LOOP_SECONDS)
-                continue
-
             prob, stext, serr = signal_up_prob()
             if serr:
                 print(serr)
@@ -205,10 +240,31 @@ def main():
 
             buy_yes_px = yes_best_ask if yes_best_ask is not None else market.yes_price
             buy_no_px = (1.0 - yes_best_bid) if yes_best_bid is not None else market.no_price
+            sell_yes_px = yes_best_bid if yes_best_bid is not None else market.yes_price
+            sell_no_px = (1.0 - yes_best_ask) if yes_best_ask is not None else market.no_price
+
+            maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px)
 
             print(
                 f"Round: {market.slug} | yes={market.yes_price:.3f} | buy_yes={buy_yes_px:.3f} | buy_no={buy_no_px:.3f} | {stext} | spread={spread} | depth={depth:.1f} | imbalance={imbalance:.2f}"
             )
+
+            round_count = entries_this_round(market.slug)
+            if round_count >= MAX_ENTRIES_PER_ROUND:
+                eta = seconds_to_next(market.slug, market.end_ts)
+                eta_safe = max(0, eta) if eta is not None else None
+                eta_txt = f" | next in {eta_safe}s" if eta_safe is not None else ""
+                print(f"Round: {market.slug} | No trade | round cap {round_count}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
+
+                # If pinned slug is already expired, roll to next round automatically.
+                if current_force_slug and AUTO_ROLL_FORCE_SLUG and eta is not None and eta < 0:
+                    nxt = _advance_slug_once(current_force_slug)
+                    if nxt != current_force_slug:
+                        current_force_slug = nxt
+                        print(f"Auto-rolled forced slug -> {current_force_slug}")
+
+                time.sleep(LOOP_SECONDS)
+                continue
 
             if spread is not None and spread > MAX_SPREAD:
                 print("No trade | spread too wide")
