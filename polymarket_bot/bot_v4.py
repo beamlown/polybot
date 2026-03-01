@@ -128,6 +128,11 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
+            print(
+                f"Market selected | slug={market.slug} | market_id={market.market_id} "
+                f"| yes_token_id={market.yes_token_id} | no_token_id={market.no_token_id}"
+            )
+
             round_count = entries_this_round(market.slug)
             if round_count >= MAX_ENTRIES_PER_ROUND:
                 eta = seconds_to_next(market.slug)
