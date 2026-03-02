@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import time
 from collections import deque
 from pathlib import Path
@@ -12,9 +13,8 @@ CYAN = "\033[96m"
 DIM = "\033[90m"
 RESET = "\033[0m"
 
-WIDTH = 118
 DASH_LINES = 20
-FEED_LINES = 14
+FEED_LINES = 8
 
 
 def c(v: float) -> str:
@@ -34,15 +34,23 @@ def side(side: str) -> str:
     return side
 
 
-def crop(s: str, n: int = WIDTH) -> str:
+def term_width() -> int:
+    try:
+        return max(100, min(180, shutil.get_terminal_size((120, 30)).columns))
+    except Exception:
+        return 120
+
+
+def crop(s: str, n: int) -> str:
     return s if len(s) <= n else (s[: n - 1] + "…")
 
 
-def line(ch: str = "-"):
-    return ch * WIDTH
+def line(n: int, ch: str = "-"):
+    return ch * n
 
 
 def render(d: dict, feed: deque[str]):
+    width = term_width()
     pnl = d.get("pnl", {})
     net = float(pnl.get("net", 0) or 0)
     realized = float(pnl.get("realized_all", 0) or 0)
@@ -52,13 +60,13 @@ def render(d: dict, feed: deque[str]):
     rr = d.get("rolling", {})
 
     out = []
-    out.append(f"{CYAN}{line('=')}{RESET}")
+    out.append(f"{CYAN}{line(width, '=')}{RESET}")
     out.append(f"{CYAN} POLYMARKET V5.3.1 HYBRID MONITOR {RESET}")
-    out.append(f"{CYAN}{line('=')}{RESET}")
-    out.append(crop(f"ENGINE: {d.get('engine')} | BUILD: {d.get('build')} | NOW: {d.get('now')}", WIDTH))
-    out.append(crop(f"BAL REALIZED: ${d.get('balance_est',0):,.2f} | REALIZED: {c(realized)} | OPEN: {c(unreal)} | LIVE: {c(net)} | LIVE BAL: ${d.get('live_balance_est', d.get('balance_est',0)):,.2f}", WIDTH))
-    out.append(crop(f"SLOTS: {s.get('open',0)}/{s.get('max',0)} | TOTAL TRADES: {d.get('total_trades',0)}", WIDTH))
-    out.append(line())
+    out.append(f"{CYAN}{line(width, '=')}{RESET}")
+    out.append(crop(f"ENGINE: {d.get('engine')} | BUILD: {d.get('build')} | NOW: {d.get('now')}", width))
+    out.append(crop(f"BAL REALIZED: ${d.get('balance_est',0):,.2f} | REALIZED: {c(realized)} | OPEN: {c(unreal)} | LIVE: {c(net)} | LIVE BAL: ${d.get('live_balance_est', d.get('balance_est',0)):,.2f}", width))
+    out.append(crop(f"SLOTS: {s.get('open',0)}/{s.get('max',0)} | TOTAL TRADES: {d.get('total_trades',0)}", width))
+    out.append(line(width))
     out.append("OPEN POSITIONS")
     out.append("ID    SIDE   ENTRY    MARK     REMAIN    PNL($)    SLUG")
     if not opens:
@@ -70,9 +78,9 @@ def render(d: dict, feed: deque[str]):
             p = r.get("pnl_usd")
             ptxt = c(float(p)) if p is not None else "n/a"
             row = f"{str(r.get('id')):<5} {side(str(r.get('side'))):<6} {float(r.get('entry',0)):>7.4f}  {mark_t:>7}  {float(r.get('remaining_size',0)):>8.2f}  {ptxt:>8}  {r.get('slug')}"
-            out.append(crop(row, WIDTH))
+            out.append(crop(row, width))
 
-    out.append(line())
+    out.append(line(width))
     r25 = rr.get("r25", {})
     r50 = rr.get("r50", {})
     r100 = rr.get("r100", {})
@@ -81,13 +89,13 @@ def render(d: dict, feed: deque[str]):
             f"ROLLING | 25: W/L={r25.get('wins',0)}/{r25.get('losses',0)} WR={float(r25.get('wr',0) or 0):.1f}% PNL={c(float(r25.get('pnl',0) or 0))} "
             f"| 50: W/L={r50.get('wins',0)}/{r50.get('losses',0)} WR={float(r50.get('wr',0) or 0):.1f}% PNL={c(float(r50.get('pnl',0) or 0))} "
             f"| 100: W/L={r100.get('wins',0)}/{r100.get('losses',0)} WR={float(r100.get('wr',0) or 0):.1f}% PNL={c(float(r100.get('pnl',0) or 0))}",
-            WIDTH,
+            width,
         )
     )
-    out.append(line())
+    out.append(line(width))
     out.append("LIVE FEED")
     for msg in list(feed)[-FEED_LINES:]:
-        out.append(crop(msg, WIDTH))
+        out.append(crop(msg, width))
 
     # pad fixed screen to prevent leftover artifacts
     need = DASH_LINES + FEED_LINES + 12
@@ -101,6 +109,7 @@ def render(d: dict, feed: deque[str]):
 def main():
     feed = deque(maxlen=120)
     seen_close_ids = set()
+    primed = False
     last_open_sig = None
     last_now = None
     last_status = None
@@ -118,6 +127,13 @@ def main():
         now = d.get("now")
         if now != last_now:
             last_now = now
+
+        if not primed:
+            for r in d.get("recent_closed", []):
+                rid = r.get("id")
+                if rid is not None:
+                    seen_close_ids.add(rid)
+            primed = True
 
         opens = d.get("open_positions", [])
         open_sig = tuple((r.get("id"), r.get("mark"), r.get("pnl_usd")) for r in opens)
