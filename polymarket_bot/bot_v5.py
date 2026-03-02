@@ -378,9 +378,7 @@ def open_positions_total() -> int:
 def pending_intents_total() -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS pending_intents (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, slug TEXT, side TEXT, status TEXT, expires_ts TEXT)")
     n = int(c.execute("SELECT COUNT(*) FROM pending_intents WHERE status='PENDING'").fetchone()[0] or 0)
-    conn.commit()
     conn.close()
     return n
 
@@ -388,7 +386,6 @@ def pending_intents_total() -> int:
 def cleanup_expired_intents() -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS pending_intents (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, slug TEXT, side TEXT, status TEXT, expires_ts TEXT)")
     now_iso = datetime.now(UTC).isoformat()
     c.execute("UPDATE pending_intents SET status='EXPIRED' WHERE status='PENDING' AND expires_ts IS NOT NULL AND expires_ts < ?", (now_iso,))
     n = int(c.rowcount or 0)
@@ -400,9 +397,7 @@ def cleanup_expired_intents() -> int:
 def has_pending_intent(slug: str, side: str) -> bool:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS pending_intents (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, slug TEXT, side TEXT, status TEXT, expires_ts TEXT)")
     n = int(c.execute("SELECT COUNT(*) FROM pending_intents WHERE slug=? AND side=? AND status='PENDING'", (slug, side)).fetchone()[0] or 0)
-    conn.commit()
     conn.close()
     return n > 0
 
@@ -410,9 +405,7 @@ def has_pending_intent(slug: str, side: str) -> bool:
 def reserve_intent(slug: str, side: str) -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS pending_intents (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, slug TEXT, side TEXT, status TEXT, expires_ts TEXT)")
     if int(c.execute("SELECT COUNT(*) FROM pending_intents WHERE slug=? AND side=? AND status='PENDING'", (slug, side)).fetchone()[0] or 0) > 0:
-        conn.commit()
         conn.close()
         return 0
     now = datetime.now(UTC)
