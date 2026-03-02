@@ -320,6 +320,19 @@ def init_db():
         if "scale_trigger_note" not in cols:
             c.execute("ALTER TABLE trades ADD COLUMN scale_trigger_note TEXT")
 
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_intents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT,
+                slug TEXT,
+                side TEXT,
+                status TEXT,
+                expires_ts TEXT
+            )
+            """
+        )
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -357,6 +370,65 @@ def open_positions_total() -> int:
     n = int(c.execute(q).fetchone()[0] or 0)
     conn.close()
     return n
+
+
+def pending_intents_total() -> int:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS pending_intents (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, slug TEXT, side TEXT, status TEXT, expires_ts TEXT)")
+    n = int(c.execute("SELECT COUNT(*) FROM pending_intents WHERE status='PENDING'").fetchone()[0] or 0)
+    conn.commit()
+    conn.close()
+    return n
+
+
+def cleanup_expired_intents() -> int:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS pending_intents (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, slug TEXT, side TEXT, status TEXT, expires_ts TEXT)")
+    now_iso = datetime.now(UTC).isoformat()
+    c.execute("UPDATE pending_intents SET status='EXPIRED' WHERE status='PENDING' AND expires_ts IS NOT NULL AND expires_ts < ?", (now_iso,))
+    n = int(c.rowcount or 0)
+    conn.commit()
+    conn.close()
+    return n
+
+
+def has_pending_intent(slug: str, side: str) -> bool:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS pending_intents (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, slug TEXT, side TEXT, status TEXT, expires_ts TEXT)")
+    n = int(c.execute("SELECT COUNT(*) FROM pending_intents WHERE slug=? AND side=? AND status='PENDING'", (slug, side)).fetchone()[0] or 0)
+    conn.commit()
+    conn.close()
+    return n > 0
+
+
+def reserve_intent(slug: str, side: str) -> int:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS pending_intents (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, slug TEXT, side TEXT, status TEXT, expires_ts TEXT)")
+    if int(c.execute("SELECT COUNT(*) FROM pending_intents WHERE slug=? AND side=? AND status='PENDING'", (slug, side)).fetchone()[0] or 0) > 0:
+        conn.commit()
+        conn.close()
+        return 0
+    now = datetime.now(UTC)
+    expires = now.timestamp() + max(1, PENDING_ORDER_TIMEOUT_SEC)
+    c.execute("INSERT INTO pending_intents (ts,slug,side,status,expires_ts) VALUES (?,?,?,?,?)", (now.isoformat(), slug, side, 'PENDING', datetime.fromtimestamp(expires, UTC).isoformat()))
+    rid = int(c.lastrowid or 0)
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def resolve_intent(intent_id: int, status: str = "DONE"):
+    if intent_id <= 0:
+        return
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("UPDATE pending_intents SET status=? WHERE id=?", (status, int(intent_id)))
+    conn.commit()
+    conn.close()
 
 
 def open_positions_this_round(slug: str) -> int:
@@ -1147,6 +1219,7 @@ def main():
     while True:
         try:
             write_state("loop")
+            cleanup_expired_intents()
             maybe_close_any_expired_open_positions()
             maybe_auto_close_stale_positions()
             maybe_manage_all_open_slug_exits(ob)
@@ -1229,9 +1302,10 @@ def main():
                 continue
 
             candidates.sort(key=lambda x: x[0], reverse=True)
-            available_slots = max(0, MAX_CONCURRENT_TRADES - open_positions_total())
+            pending_n = pending_intents_total()
+            available_slots = max(0, MAX_CONCURRENT_TRADES - open_positions_total() - pending_n)
             if available_slots <= 0:
-                vprint(f"SELECTED | n=0 reason=no_available_slots max_concurrent={MAX_CONCURRENT_TRADES}")
+                vprint(f"SELECTED | n=0 reason=no_available_slots max_concurrent={MAX_CONCURRENT_TRADES} pending={pending_n}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -1468,6 +1542,11 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
+            if has_pending_intent(market.slug, side):
+                vprint("No trade | pending intent exists for slug/side")
+                time.sleep(LOOP_SECONDS)
+                continue
+
             if has_open_opposite_side(market.slug, side):
                 vprint("No trade | opposite side already open this round")
                 time.sleep(LOOP_SECONDS)
@@ -1528,11 +1607,21 @@ def main():
                 f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f} "
                 f"source={entry_source} bal={balance_now:.2f} risk={risk:.2f} mult={risk_mult:.2f}"
             )
-            log_trade(
-                market.slug, market.market_id, side, entry, size, edge, note, trade_token_id, entry_source,
-                parent_trade_id=parent_trade_id, entry_tier=entry_tier, is_scale_in=is_scale_in,
-                scale_group_id=scale_group_id, scale_trigger_note=scale_trigger_note, scale_in_count=scale_in_count_for_insert,
-            )
+            intent_id = reserve_intent(market.slug, side)
+            if intent_id <= 0:
+                vprint("No trade | failed to reserve pending intent")
+                time.sleep(LOOP_SECONDS)
+                continue
+            try:
+                log_trade(
+                    market.slug, market.market_id, side, entry, size, edge, note, trade_token_id, entry_source,
+                    parent_trade_id=parent_trade_id, entry_tier=entry_tier, is_scale_in=is_scale_in,
+                    scale_group_id=scale_group_id, scale_trigger_note=scale_trigger_note, scale_in_count=scale_in_count_for_insert,
+                )
+                resolve_intent(intent_id, "DONE")
+            except Exception:
+                resolve_intent(intent_id, "FAILED")
+                raise
             if is_scale_in:
                 recompute_group_avg_entry(market.slug, side)
                 increment_group_scale_count(market.slug, side)
