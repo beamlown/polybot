@@ -65,6 +65,10 @@ MAX_TRADES_PER_SLUG = int(os.getenv("MAX_TRADES_PER_SLUG", "1"))
 RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.03"))
 MIN_DEPTH_TOP5 = float(os.getenv("MIN_DEPTH_TOP5", "50"))
+MIN_DEPTH_TOP5_USD = float(os.getenv("MIN_DEPTH_TOP5_USD", "50"))
+EST_TAKER_FEE_RATE = float(os.getenv("EST_TAKER_FEE_RATE", "0.0025"))
+EST_TAKER_FEE_EXP = float(os.getenv("EST_TAKER_FEE_EXP", "2.0"))
+NET_EDGE_BUFFER = float(os.getenv("NET_EDGE_BUFFER", "0.005"))
 LOOP_SECONDS = int(os.getenv("LOOP_SECONDS", "5"))
 QUIET_LOGGING = os.getenv("QUIET_LOGGING", "true").strip().lower() in ("1", "true", "yes", "on")
 MIN_SECONDS_TO_EXPIRY = int(os.getenv("MIN_SECONDS_TO_EXPIRY", "0"))
@@ -73,8 +77,8 @@ ENTRY_WINDOW_END_SECONDS = int(os.getenv("ENTRY_WINDOW_END_SECONDS", "999999"))
 MAX_EXIT_QUOTE_AGE_SECONDS = float(os.getenv("MAX_EXIT_QUOTE_AGE_SECONDS", "2.0"))
 FORCE_FLAT_BEFORE_EXPIRY_SECONDS = int(os.getenv("FORCE_FLAT_BEFORE_EXPIRY_SECONDS", "10"))
 DB = "trades_v4.db"
-BUILD_TAG = "v5.1.2026-03-02.001"
-ENGINE_TAG = "v5_paper_fill_realism"
+BUILD_TAG = "v5.2.2026-03-02.001"
+ENGINE_TAG = "v5_fee_aware_side_liquidity"
 STATE_PATH = os.path.join(os.path.dirname(__file__), "runtime", "state_v5.json")
 
 
@@ -496,6 +500,11 @@ def recent_side_realized_pnl(side: str, lookback: int) -> float:
     ).fetchall()
     conn.close()
     return float(sum(float(r[0] or 0) for r in rows))
+
+
+def estimated_taker_fee_per_share(price: float) -> float:
+    p = max(0.0, min(1.0, float(price)))
+    return EST_TAKER_FEE_RATE * (min(p, 1.0 - p) ** EST_TAKER_FEE_EXP)
 
 
 def candidate_score(spread: float | None, depth: float, imbalance: float, in_band: bool, top_bid_usd: float, top_ask_usd: float) -> float:
@@ -978,17 +987,20 @@ def main():
                     vprint(f"CANDIDATE_FAIL | prefix={pref} | slug={market.slug} | reason=missing_token_ids")
                     continue
 
-                book, berr = ob.read(market.yes_token_id)
-                if berr:
+                yes_book, yerr = ob.read(market.yes_token_id)
+                no_book, nerr = ob.read(market.no_token_id)
+                if yerr or nerr or yes_book is None or no_book is None:
                     vprint(f"CANDIDATE_FAIL | prefix={pref} | slug={market.slug} | reason=clob_quote_fail")
                     continue
 
-                spread = book.spread
-                depth = book.depth_top5
-                yes_bid = book.best_bid
-                yes_ask = book.best_ask
-                top_bid_usd = (yes_bid or 0.0) * 100.0
-                top_ask_usd = (yes_ask or 0.0) * 100.0
+                spread = yes_book.spread
+                depth = yes_book.depth_top5
+                depth_usd = yes_book.depth_top5_usd
+                yes_bid = yes_book.best_bid
+                yes_ask = yes_book.best_ask
+                top_bid_usd = yes_book.top_bid_usd
+                top_ask_usd = yes_book.top_ask_usd
+
                 # Volume gate is optional; when disabled (<=0) rely on execution quality gates.
                 if MIN_VOLUME24H <= 0:
                     vol_ok = True
@@ -998,6 +1010,7 @@ def main():
                 gate_ok = (
                     (spread is not None and spread <= MAX_SPREAD)
                     and depth >= MIN_DEPTH_TOP5
+                    and depth_usd >= MIN_DEPTH_TOP5_USD
                     and vol_ok
                 )
                 fail_reason = ""
@@ -1006,6 +1019,8 @@ def main():
                         fail_reason = "spread"
                     elif depth < MIN_DEPTH_TOP5:
                         fail_reason = "depth"
+                    elif depth_usd < MIN_DEPTH_TOP5_USD:
+                        fail_reason = "depth_usd"
                     elif not vol_ok:
                         fail_reason = "volume24h"
 
@@ -1013,16 +1028,16 @@ def main():
                 strong_top = (top_bid_usd >= TOP_BOOK_STRONG_USD and top_ask_usd >= TOP_BOOK_STRONG_USD)
                 vprint(
                     f"CANDIDATE | engine={ENGINE_TAG} build={BUILD_TAG} | prefix={pref} slug={market.slug} suffix={market.suffix} market_id={market.market_id} "
-                    f"bid={yes_bid} ask={yes_ask} spread={spread} depth={depth:.1f} top_bid_usd={top_bid_usd:.1f} top_ask_usd={top_ask_usd:.1f} "
+                    f"bid={yes_bid} ask={yes_ask} spread={spread} depth={depth:.1f} depth_usd={depth_usd:.1f} top_bid_usd={top_bid_usd:.1f} top_ask_usd={top_ask_usd:.1f} "
                     f"top_bonus={'strong' if strong_top else ('weak' if weak_top else 'none')} vol24h={market.volume24h} gate={gate_ok} reason={fail_reason or 'ok'}"
                 )
 
                 if gate_ok:
                     in_band = (BUY_YES_MIN_ENTRY <= (yes_ask or market.yes_price) < BUY_YES_MAX_ENTRY) or (
-                        BUY_NO_MIN_ENTRY <= (1.0 - (yes_bid or market.yes_price)) < BUY_NO_MAX_ENTRY
+                        BUY_NO_MIN_ENTRY <= (no_book.best_ask or market.no_price) < BUY_NO_MAX_ENTRY
                     )
-                    score = candidate_score(spread, depth, book.imbalance, in_band, top_bid_usd, top_ask_usd)
-                    candidates.append((score, pref, market, book))
+                    score = candidate_score(spread, depth, yes_book.imbalance, in_band, top_bid_usd, top_ask_usd)
+                    candidates.append((score, pref, market, yes_book, no_book))
 
             if not candidates:
                 time.sleep(LOOP_SECONDS)
@@ -1037,13 +1052,13 @@ def main():
 
             selected = []
             used_keys = set()
-            for score, pref, mkt, bok in candidates:
+            for score, pref, mkt, bok_yes, bok_no in candidates:
                 key = (pref, mkt.suffix)
                 if key in used_keys:
                     continue
                 if trades_taken_on_slug(mkt.slug) >= MAX_TRADES_PER_SLUG:
                     continue
-                selected.append((score, pref, mkt, bok))
+                selected.append((score, pref, mkt, bok_yes, bok_no))
                 used_keys.add(key)
                 if len(selected) >= available_slots:
                     break
@@ -1057,7 +1072,7 @@ def main():
             vprint(f"SELECTED | n={len(selected)} -> {picked_txt}")
 
             # Current execution path processes one candidate per loop (highest-ranked selected).
-            _, chosen_prefix, market, book = selected[0]
+            _, chosen_prefix, market, book, no_book = selected[0]
 
             if market.slug != last_logged_slug:
                 print(
@@ -1066,7 +1081,8 @@ def main():
                 )
                 last_logged_slug = market.slug
 
-            prob, stext, serr = signal_up_prob()
+            asset = "SOL" if str(market.slug).startswith("sol-") else "BTC"
+            prob, stext, serr = signal_up_prob(asset=asset)
             if serr:
                 print(serr)
                 time.sleep(LOOP_SECONDS)
@@ -1081,9 +1097,8 @@ def main():
             yes_best_bid = book.best_bid if (berr is None and book is not None) else market.best_bid
             yes_best_ask = book.best_ask if (berr is None and book is not None) else market.best_ask
 
-            no_book, no_berr = ob.read(market.no_token_id) if market.no_token_id else (None, "missing_no_token")
-            no_best_bid = no_book.best_bid if (no_berr is None and no_book is not None) else None
-            no_best_ask = no_book.best_ask if (no_berr is None and no_book is not None) else None
+            no_best_bid = no_book.best_bid if no_book is not None else None
+            no_best_ask = no_book.best_ask if no_book is not None else None
 
             buy_yes_px = yes_best_ask if yes_best_ask is not None else market.yes_price
             buy_no_px = no_best_ask if no_best_ask is not None else ((1.0 - yes_best_bid) if yes_best_bid is not None else market.no_price)
@@ -1188,6 +1203,10 @@ def main():
             regime, votes = parse_regime_votes(stext or "")
             edge_yes = prob - buy_yes_px
             edge_no = (1.0 - prob) - buy_no_px
+            fee_yes = estimated_taker_fee_per_share(buy_yes_px) * 2.0
+            fee_no = estimated_taker_fee_per_share(buy_no_px) * 2.0
+            edge_yes_net = edge_yes - fee_yes - NET_EDGE_BUFFER
+            edge_no_net = edge_no - fee_no - NET_EDGE_BUFFER
 
             # Directional guard: only take side aligned with forecast, and skip weak 50/50 forecasts.
             prob_delta = abs(prob - 0.5)
@@ -1216,8 +1235,8 @@ def main():
             if no_recent < 0:
                 side_no_min_edge += LOSING_SIDE_EDGE_PENALTY
 
-            yes_ok = edge_yes >= side_yes_min_edge and long_allowed
-            no_ok = edge_no >= side_no_min_edge and short_allowed
+            yes_ok = edge_yes_net >= side_yes_min_edge and long_allowed
+            no_ok = edge_no_net >= side_no_min_edge and short_allowed
 
             # Fair-value discount guard: only buy when market is below modeled fair value by a margin.
             yes_fair_limit = prob * (1.0 - FAIR_VALUE_DISCOUNT_PCT)
@@ -1231,9 +1250,9 @@ def main():
             no_ok = no_ok and (BUY_NO_MIN_ENTRY <= buy_no_px < BUY_NO_MAX_ENTRY)
 
             # Avoid coin-flip entries: require one side to clearly dominate.
-            if yes_ok and no_ok and abs(edge_yes - edge_no) < MIN_SIDE_ADVANTAGE:
+            if yes_ok and no_ok and abs(edge_yes_net - edge_no_net) < MIN_SIDE_ADVANTAGE:
                 print(
-                    f"No trade | side advantage too small (edge_yes={edge_yes:.4f}, edge_no={edge_no:.4f}, min={MIN_SIDE_ADVANTAGE:.4f})"
+                    f"No trade | side advantage too small (edge_yes={edge_yes_net:.4f}, edge_no={edge_no_net:.4f}, min={MIN_SIDE_ADVANTAGE:.4f})"
                 )
                 time.sleep(LOOP_SECONDS)
                 continue
@@ -1241,23 +1260,23 @@ def main():
             prefer_yes = prob > 0.5
             prefer_no = prob < 0.5
 
-            if prefer_yes and yes_ok and (not no_ok or edge_yes >= edge_no):
+            if prefer_yes and yes_ok and (not no_ok or edge_yes_net >= edge_no_net):
                 side = "BUY_YES"
                 entry = buy_yes_px
-                edge = edge_yes
+                edge = edge_yes_net
                 trade_token_id = market.yes_token_id
                 entry_source = "clob" if yes_best_ask is not None else "gamma"
-            elif prefer_no and no_ok and (not yes_ok or edge_no >= edge_yes):
+            elif prefer_no and no_ok and (not yes_ok or edge_no_net >= edge_yes_net):
                 side = "BUY_NO"
                 entry = buy_no_px
-                edge = edge_no
+                edge = edge_no_net
                 trade_token_id = market.no_token_id
-                entry_source = "clob" if yes_best_bid is not None else "gamma"
+                entry_source = "clob" if no_best_ask is not None else "gamma"
 
             if not side:
                 regime_txt = f"regime={regime} votes={votes}" if regime is not None else "regime=n/a"
                 print(
-                    f"No trade | edge_yes={edge_yes:.4f} edge_no={edge_no:.4f} "
+                    f"No trade | edge_yes={edge_yes_net:.4f} edge_no={edge_no_net:.4f} "
                     f"| fair_yes<= {yes_fair_limit:.3f} fair_no<= {no_fair_limit:.3f} "
                     f"| {regime_txt}"
                 )

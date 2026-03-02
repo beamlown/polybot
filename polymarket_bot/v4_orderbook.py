@@ -11,9 +11,12 @@ class OBStats:
     spread: Optional[float]
     midpoint: Optional[float]
     depth_top5: float
+    depth_top5_usd: float
     imbalance: float
     best_bid: Optional[float]
     best_ask: Optional[float]
+    top_bid_usd: float
+    top_ask_usd: float
 
 
 class OBReader:
@@ -33,6 +36,8 @@ class OBReader:
             asks = sorted(book.asks, key=lambda x: float(x.price))
             bid_depth = sum(float(x.size) for x in bids[:5]) if bids else 0.0
             ask_depth = sum(float(x.size) for x in asks[:5]) if asks else 0.0
+            bid_depth_usd = sum(float(x.price) * float(x.size) for x in bids[:5]) if bids else 0.0
+            ask_depth_usd = sum(float(x.price) * float(x.size) for x in asks[:5]) if asks else 0.0
             total = bid_depth + ask_depth
             imbalance = ((bid_depth - ask_depth) / total) if total > 0 else 0.0
             depth = total
@@ -50,6 +55,8 @@ class OBReader:
             except Exception:
                 pass
 
-            return OBStats(spread, midpoint, depth, imbalance, best_bid, best_ask), None
+            top_bid_usd = (float(best_bid) * float(bids[0].size)) if (best_bid is not None and bids) else 0.0
+            top_ask_usd = (float(best_ask) * float(asks[0].size)) if (best_ask is not None and asks) else 0.0
+            return OBStats(spread, midpoint, depth, bid_depth_usd + ask_depth_usd, imbalance, best_bid, best_ask, top_bid_usd, top_ask_usd), None
         except Exception as e:
             return None, fmt(E_ORDERBOOK_PARSE, f"orderbook parse failed: {e}")

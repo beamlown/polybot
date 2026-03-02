@@ -9,19 +9,19 @@ def _pct(a: float, b: float) -> float:
     return 0.0 if a <= 0 else (b - a) / a
 
 
-def _binance(interval: str, limit: int):
+def _binance(interval: str, limit: int, symbol: str):
     r = requests.get(
         "https://api.binance.com/api/v3/klines",
-        params={"symbol": "BTCUSDT", "interval": interval, "limit": limit},
+        params={"symbol": symbol, "interval": interval, "limit": limit},
         timeout=10,
     )
     r.raise_for_status()
     return [float(x[4]) for x in r.json()]
 
 
-def _coinbase(granularity: int, limit: int):
+def _coinbase(granularity: int, limit: int, product: str):
     r = requests.get(
-        "https://api.exchange.coinbase.com/products/BTC-USD/candles",
+        f"https://api.exchange.coinbase.com/products/{product}/candles",
         params={"granularity": granularity},
         timeout=10,
     )
@@ -30,11 +30,11 @@ def _coinbase(granularity: int, limit: int):
     return [float(x[4]) for x in rows]
 
 
-def _series(interval: str, limit: int):
+def _series(interval: str, limit: int, symbol: str, product: str):
     try:
-        return _binance(interval, limit)
+        return _binance(interval, limit, symbol)
     except Exception:
-        return _coinbase(60 if interval == "1m" else 300, limit)
+        return _coinbase(60 if interval == "1m" else 300, limit, product)
 
 
 def _ema(values: list[float], span: int) -> float:
@@ -64,10 +64,13 @@ def _rsi(values: list[float], period: int = 14) -> float:
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
+def signal_up_prob(asset: str = "BTC") -> Tuple[Optional[float], Optional[str], Optional[str]]:
+    asset_u = str(asset or "BTC").upper()
+    symbol = "SOLUSDT" if asset_u.startswith("SOL") else "BTCUSDT"
+    product = "SOL-USD" if asset_u.startswith("SOL") else "BTC-USD"
     try:
-        c1 = _series("1m", 60)
-        c5 = _series("5m", 100)
+        c1 = _series("1m", 60, symbol, product)
+        c5 = _series("5m", 100, symbol, product)
     except Exception as e:
         return None, None, fmt(E_SIGNAL_HTTP, f"price source failed: {e}")
 
@@ -128,7 +131,7 @@ def signal_up_prob() -> Tuple[Optional[float], Optional[str], Optional[str]]:
         regime = "BULL" if bull_votes >= 5 else ("BEAR" if bull_votes <= 2 else "MIXED")
 
         text = (
-            f"regime={regime} votes={bull_votes}/7"
+            f"asset={asset_u} | regime={regime} votes={bull_votes}/7"
             f" | m1_fast={m1_fast:.3%}"
             f" | m1_slow={m1_slow:.3%}"
             f" | m5={m5:.3%}"
