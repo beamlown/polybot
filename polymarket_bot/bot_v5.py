@@ -791,6 +791,49 @@ def maybe_close_any_expired_open_positions() -> int:
     return closed
 
 
+def _series_prefix_from_slug(slug: str) -> str:
+    try:
+        i = str(slug).rfind("-5m-")
+        if i > 0:
+            return str(slug)[:i]
+    except Exception:
+        pass
+    return SERIES_PREFIX
+
+
+def maybe_manage_all_open_slug_exits(ob: OBReader) -> int:
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    slugs = [r[0] for r in c.execute("SELECT DISTINCT slug FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0").fetchall()]
+    conn.close()
+
+    total_closed = 0
+    for slug in slugs:
+        pref = _series_prefix_from_slug(slug)
+        market, derr = discover(pref, ROUND_MINUTES, force_slug=slug)
+        if derr or market is None:
+            continue
+
+        yes_book, yerr = ob.read(market.yes_token_id) if market.yes_token_id else (None, "missing_yes_token")
+        no_book, nerr = ob.read(market.no_token_id) if market.no_token_id else (None, "missing_no_token")
+        yes_best_bid = yes_book.best_bid if (yerr is None and yes_book is not None) else market.best_bid
+        yes_best_ask = yes_book.best_ask if (yerr is None and yes_book is not None) else market.best_ask
+        no_best_bid = no_book.best_bid if (nerr is None and no_book is not None) else None
+
+        sell_yes_px = yes_best_bid if yes_best_bid is not None else market.yes_price
+        sell_no_px = no_best_bid if no_best_bid is not None else ((1.0 - yes_best_ask) if yes_best_ask is not None else market.no_price)
+        quote_ts = datetime.now(UTC)
+        eta_now = seconds_to_next(market.slug, market.end_ts)
+
+        total_closed += maybe_auto_force_flatten_before_expiry(market.slug, eta_now, sell_yes_px, sell_no_px, quote_ts)
+        total_closed += maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px, quote_ts)
+        total_closed += maybe_auto_group_take_profit(market.slug, sell_yes_px, sell_no_px)
+        total_closed += maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px, quote_ts)
+        total_closed += maybe_auto_stop_loss(market.slug, eta_now, sell_yes_px, sell_no_px, quote_ts)
+
+    return total_closed
+
+
 def maybe_auto_close_stale_positions() -> int:
     if MAX_HOLD_SECONDS <= 0:
         return 0
@@ -870,6 +913,7 @@ def main():
             write_state("loop")
             maybe_close_any_expired_open_positions()
             maybe_auto_close_stale_positions()
+            maybe_manage_all_open_slug_exits(ob)
 
             day_count = trades_today()
             if MAX_TRADES_PER_DAY > 0 and day_count >= MAX_TRADES_PER_DAY:
@@ -1031,11 +1075,6 @@ def main():
                     continue
 
             eta_now = seconds_to_next(market.slug, market.end_ts)
-            maybe_auto_force_flatten_before_expiry(market.slug, eta_now, sell_yes_px, sell_no_px, quote_ts)
-            maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px, quote_ts)
-            maybe_auto_group_take_profit(market.slug, sell_yes_px, sell_no_px)
-            maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px, quote_ts)
-            maybe_auto_stop_loss(market.slug, eta_now, sell_yes_px, sell_no_px, quote_ts)
 
             # Round timeline window guard
             now_ts = int(datetime.now(UTC).timestamp())
