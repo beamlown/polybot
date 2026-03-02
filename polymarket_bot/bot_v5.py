@@ -30,6 +30,10 @@ AUTO_TAKE_PROFIT_PCT = float(os.getenv("AUTO_TAKE_PROFIT_PCT", "0"))
 AUTO_TAKE_PROFIT_ABS = float(os.getenv("AUTO_TAKE_PROFIT_ABS", "0.65"))
 PARTIAL_TP_TRIGGER_PCT = float(os.getenv("PARTIAL_TP_TRIGGER_PCT", "0.30"))
 PARTIAL_TP_SELL_FRACTION = float(os.getenv("PARTIAL_TP_SELL_FRACTION", "0.25"))
+TP_PRINCIPAL_TRIGGER_PCT = float(os.getenv("TP_PRINCIPAL_TRIGGER_PCT", "0.22"))
+TP_PRINCIPAL_SELL_FRAC = float(os.getenv("TP_PRINCIPAL_SELL_FRAC", "0.70"))
+RUNNER_STOP_BUFFER_PCT = float(os.getenv("RUNNER_STOP_BUFFER_PCT", "0.02"))
+RUNNER_EXPIRY_CLOSE_SEC = int(os.getenv("RUNNER_EXPIRY_CLOSE_SEC", "20"))
 GROUP_TAKE_PROFIT_PCT = float(os.getenv("GROUP_TAKE_PROFIT_PCT", "0.30"))
 BREAKEVEN_AFTER_PARTIAL = os.getenv("BREAKEVEN_AFTER_PARTIAL", "true").strip().lower() in ("1", "true", "yes", "on")
 BREAKEVEN_BUFFER_PCT = float(os.getenv("BREAKEVEN_BUFFER_PCT", "0.01"))
@@ -450,20 +454,21 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
         if close_price is None:
             continue
 
-        # 1) Mandatory partial at +30% (default)
-        partial_target = entry * (1.0 + PARTIAL_TP_TRIGGER_PCT)
+        # 1) Deterministic principal recovery partial
+        partial_target = entry * (1.0 + TP_PRINCIPAL_TRIGGER_PCT)
         if int(ptd) == 0 and close_price >= partial_target:
-            qty = max(0.0, rem * max(0.0, min(1.0, PARTIAL_TP_SELL_FRACTION)))
+            qty = max(0.0, rem * max(0.0, min(1.0, TP_PRINCIPAL_SELL_FRAC)))
             if qty > 0:
                 pnl_partial = (float(close_price) - entry) * qty
                 rem_after = max(0.0, rem - qty)
                 c.execute(
                     "UPDATE trades SET remaining_size = ?, partial_tp_done = 1, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ? WHERE id = ?",
-                    (rem_after, "partial_take_profit", float(pnl_partial), int(tid)),
+                    (rem_after, "runner_partial_take_profit", float(pnl_partial), int(tid)),
                 )
-                net = realized_net_pnl() + pnl_partial
                 side_txt = "UP" if side == "BUY_YES" else "DOWN"
-                print(f"SELL TP(partial) | {side_txt} | id={tid} | sold={qty:.2f}/{rem:.2f} | pnl={pnl_partial:+.2f}")
+                runner_stop = entry * (1.0 + RUNNER_STOP_BUFFER_PCT)
+                print(f"TP_PARTIAL | id={tid} token={side_txt} trigger={close_price:.4f} sold_frac={TP_PRINCIPAL_SELL_FRAC:.2f} sold={qty:.2f}/{rem:.2f} pnl={pnl_partial:+.2f}")
+                print(f"RUNNER_ARMED | id={tid} new_stop={runner_stop:.4f} rem={rem_after:.2f}")
                 rem = rem_after
 
         # 2) Full close remainder at standard TP or absolute price target.
@@ -769,7 +774,7 @@ def _effective_stop_px(entry: float, ptd: int, peak_now: float | None = None) ->
     cap_floor = entry * (1.0 - MAX_STOP_PCT)
     floor = max(raw_floor, cap_floor)
     if BREAKEVEN_AFTER_PARTIAL and int(ptd) == 1:
-        floor = max(floor, entry * (1.0 + BREAKEVEN_BUFFER_PCT))
+        floor = max(floor, entry * (1.0 + RUNNER_STOP_BUFFER_PCT))
         if TRAILING_STOP_AFTER_PARTIAL_PCT > 0 and peak_now is not None:
             floor = max(floor, float(peak_now) * (1.0 - TRAILING_STOP_AFTER_PARTIAL_PCT))
     return floor
@@ -1132,7 +1137,7 @@ def main():
     print(f"BOOT | engine={ENGINE_TAG} | build={BUILD_TAG} | file={os.path.abspath(__file__)}")
     print(
         f"CONFIG | edge={MIN_EDGE:.3f} prob_delta={MIN_PROB_DISTANCE:.3f} side_adv={MIN_SIDE_ADVANTAGE:.3f} "
-        f"sl={AUTO_STOP_LOSS_PCT:.2f} max_sl={MAX_STOP_PCT:.2f} tp={AUTO_TAKE_PROFIT_PCT:.2f} partial={PARTIAL_TP_TRIGGER_PCT:.2f}/{PARTIAL_TP_SELL_FRACTION:.2f} trail={TRAILING_STOP_AFTER_PARTIAL_PCT:.2f} tstop={TIME_STOP_SECONDS}s/{TIME_STOP_MAX_PNL_PCT:.2f} "
+        f"sl={AUTO_STOP_LOSS_PCT:.2f} max_sl={MAX_STOP_PCT:.2f} tp={AUTO_TAKE_PROFIT_PCT:.2f} runner={TP_PRINCIPAL_TRIGGER_PCT:.2f}/{TP_PRINCIPAL_SELL_FRAC:.2f} be_buf={RUNNER_STOP_BUFFER_PCT:.2f} trail={TRAILING_STOP_AFTER_PARTIAL_PCT:.2f} tstop={TIME_STOP_SECONDS}s/{TIME_STOP_MAX_PNL_PCT:.2f} "
         f"entries_round={MAX_ENTRIES_PER_ROUND} same_side_open_cap={MAX_SAME_SIDE_OPEN_PER_ROUND} prefixes={','.join(SERIES_PREFIXES)} max_conc={MAX_CONCURRENT_TRADES} "
         f"window={ENTRY_WINDOW_START_SECONDS}-{ENTRY_WINDOW_END_SECONDS}s loop={LOOP_SECONDS}s stop_cooldown={STOPLOSS_REENTRY_COOLDOWN_SECONDS}s sl_arm={STOP_LOSS_ARMING_DELAY_SECONDS_SL}s"
     )
