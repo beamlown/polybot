@@ -14,7 +14,7 @@ DIM = "\033[90m"
 RESET = "\033[0m"
 
 DASH_LINES = 12
-FEED_LINES = 4
+FEED_LINES = 2
 
 
 def c(v: float) -> str:
@@ -49,6 +49,17 @@ def line(n: int, ch: str = "-"):
     return ch * n
 
 
+def reason_tag(reason: str) -> str:
+    r = (reason or "").lower()
+    if "take_profit" in r:
+        return "TP"
+    if "stop_loss" in r:
+        return "SL"
+    if "expiry" in r or "expired" in r:
+        return "EXP"
+    return (reason or "?")[:6].upper()
+
+
 def render(d: dict, feed: deque[str]):
     width = term_width()
     pnl = d.get("pnl", {})
@@ -58,6 +69,7 @@ def render(d: dict, feed: deque[str]):
     s = d.get("slots", {})
     opens = d.get("open_positions", [])
     rr = d.get("rolling", {})
+    rec = d.get("recent_closed", [])[:10]
 
     out = []
     out.append(crop(f"{CYAN}V5.3.1{RESET} | {d.get('engine')} | {d.get('build')} | {d.get('now')}", width))
@@ -77,18 +89,25 @@ def render(d: dict, feed: deque[str]):
             out.append(crop(row, width))
 
     out.append(line(width))
+    out.append("LAST 10 TRADES")
+    out.append("ID  ENTRY DIR   EXIT   PCT      PNL      SLUG")
+    if not rec:
+        out.append("(none)")
+    else:
+        for r in rec:
+            entry = float(r.get("entry", 0) or 0)
+            close = float(r.get("close", entry) or entry)
+            pct = ((close - entry) / entry * 100.0) if entry > 0 else 0.0
+            pnl_txt = c(float(r.get("pnl_usd", 0) or 0))
+            entry_c = int(round(entry * 100.0))
+            row = f"{str(r.get('id')):<3} {entry_c:>3}c  {side(str(r.get('side'))):<5} {reason_tag(str(r.get('reason'))):<5} {pct:+6.1f}%  {pnl_txt:>8}  {r.get('slug')}"
+            out.append(crop(row, width))
+
+    out.append(line(width))
     r25 = rr.get("r25", {})
     r50 = rr.get("r50", {})
     r100 = rr.get("r100", {})
-    out.append("ROLL")
-    out.append(crop(f"25 W/L {r25.get('wins',0)}/{r25.get('losses',0)} | WR {float(r25.get('wr',0) or 0):.1f}% | {c(float(r25.get('pnl',0) or 0))}", width))
-    out.append(crop(f"50 W/L {r50.get('wins',0)}/{r50.get('losses',0)} | WR {float(r50.get('wr',0) or 0):.1f}% | {c(float(r50.get('pnl',0) or 0))}", width))
-    out.append(crop(f"100 W/L {r100.get('wins',0)}/{r100.get('losses',0)} | WR {float(r100.get('wr',0) or 0):.1f}% | {c(float(r100.get('pnl',0) or 0))}", width))
-    out.append(line(width))
-    out.append("LIVE FEED")
-    for msg in list(feed)[-FEED_LINES:]:
-        out.append(crop(msg, width))
-
+    out.append(crop(f"ROLL 25 {r25.get('wins',0)}/{r25.get('losses',0)} {float(r25.get('wr',0) or 0):.1f}% {c(float(r25.get('pnl',0) or 0))} | 50 {r50.get('wins',0)}/{r50.get('losses',0)} {float(r50.get('wr',0) or 0):.1f}% {c(float(r50.get('pnl',0) or 0))} | 100 {r100.get('wins',0)}/{r100.get('losses',0)} {float(r100.get('wr',0) or 0):.1f}% {c(float(r100.get('pnl',0) or 0))}", width))
     # pad fixed screen to prevent leftover artifacts
     need = DASH_LINES + FEED_LINES + 12
     while len(out) < need:

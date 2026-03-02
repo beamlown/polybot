@@ -189,7 +189,7 @@ def write_state(status_line: str = ""):
                 mark = None
             rpnl = ((float(mark) - float(rentry)) * float(rrem)) if mark is not None else None
             open_with_pnl.append((rid, rslug, rside, float(rentry), float(rrem), mark, rpnl))
-        recent = c.execute("SELECT id,slug,side,COALESCE(close_note,'n/a'),COALESCE(realized_pnl,0) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT 10").fetchall()
+        recent = c.execute("SELECT id,slug,side,COALESCE(close_note,'n/a'),COALESCE(realized_pnl,0), COALESCE(entry,0), COALESCE(close_price, entry) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT 10").fetchall()
 
         def rolling(n: int):
             rows = c.execute("SELECT COALESCE(realized_pnl,0) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT ?", (int(n),)).fetchall()
@@ -216,7 +216,10 @@ def write_state(status_line: str = ""):
                 {"id":r[0],"slug":r[1],"side":r[2],"entry":r[3],"remaining_size":r[4],"mark":r[5],"pnl_usd":r[6]}
                 for r in open_with_pnl
             ],
-            "recent_closed": [{"id":r[0],"slug":r[1],"side":r[2],"reason":r[3],"pnl_usd":r[4]} for r in recent],
+            "recent_closed": [
+                {"id":r[0],"slug":r[1],"side":r[2],"reason":r[3],"pnl_usd":r[4],"entry":r[5],"close":r[6]}
+                for r in recent
+            ],
             "total_trades": total,
             "rolling": roll,
             "status_line": status_line,
