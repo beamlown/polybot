@@ -87,6 +87,20 @@ def main():
             )
 
         print("-" * 90)
+        print("ROLLING STATS")
+        rr = d.get("rolling", {})
+        for k, label in (("r25", "25"), ("r50", "50"), ("r100", "100")):
+            x = rr.get(k, {})
+            if not x:
+                continue
+            print(
+                f"Last {label}: W/L={x.get('wins',0)}/{x.get('losses',0)} "
+                f"WR={float(x.get('wr',0) or 0):.1f}% "
+                f"PNL={color_pnl(float(x.get('pnl',0) or 0))} "
+                f"N={x.get('n',0)}"
+            )
+
+        print("-" * 90)
         print(d.get("status_line", ""))
         time.sleep(0.2)
 

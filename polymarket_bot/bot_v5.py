@@ -176,6 +176,18 @@ def write_state(status_line: str = ""):
         live_bal = start_bal + realized + unrealized
         open_rows = c.execute("SELECT id,slug,side,entry,COALESCE(remaining_size,size) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0 ORDER BY id DESC LIMIT 8").fetchall()
         recent = c.execute("SELECT id,slug,side,COALESCE(close_note,'n/a'),COALESCE(realized_pnl,0) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT 10").fetchall()
+
+        def rolling(n: int):
+            rows = c.execute("SELECT COALESCE(realized_pnl,0) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT ?", (int(n),)).fetchall()
+            vals = [float(r[0] or 0.0) for r in rows]
+            w = sum(1 for v in vals if v > 0)
+            l = sum(1 for v in vals if v < 0)
+            b = sum(1 for v in vals if abs(v) < 1e-12)
+            d = w + l
+            wr = (w / d * 100.0) if d > 0 else 0.0
+            return {"n": len(vals), "wins": w, "losses": l, "breakeven": b, "wr": wr, "pnl": sum(vals)}
+
+        roll = {"r25": rolling(25), "r50": rolling(50), "r100": rolling(100)}
         conn.close()
         payload = {
             "engine": ENGINE_TAG,
@@ -189,6 +201,7 @@ def write_state(status_line: str = ""):
             "open_positions": [{"id":r[0],"slug":r[1],"side":r[2],"entry":r[3],"remaining_size":r[4]} for r in open_rows],
             "recent_closed": [{"id":r[0],"slug":r[1],"side":r[2],"reason":r[3],"pnl_usd":r[4]} for r in recent],
             "total_trades": total,
+            "rolling": roll,
             "status_line": status_line,
         }
         tmp = STATE_PATH + ".tmp"
