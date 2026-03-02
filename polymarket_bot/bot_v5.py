@@ -80,9 +80,12 @@ ENTRY_WINDOW_START_SECONDS = int(os.getenv("ENTRY_WINDOW_START_SECONDS", "0"))
 ENTRY_WINDOW_END_SECONDS = int(os.getenv("ENTRY_WINDOW_END_SECONDS", "999999"))
 MAX_EXIT_QUOTE_AGE_SECONDS = float(os.getenv("MAX_EXIT_QUOTE_AGE_SECONDS", "2.0"))
 FORCE_FLAT_BEFORE_EXPIRY_SECONDS = int(os.getenv("FORCE_FLAT_BEFORE_EXPIRY_SECONDS", "10"))
+SCALE_IN_ENABLED = os.getenv("SCALE_IN_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+MAX_SCALE_INS_PER_GROUP = int(os.getenv("MAX_SCALE_INS_PER_GROUP", "2"))
+SCALE_IN_MIN_IMPROVEMENT = float(os.getenv("SCALE_IN_MIN_IMPROVEMENT", "0.02"))
 DB = "trades_v4.db"
-BUILD_TAG = "v5.2.2026-03-02.001"
-ENGINE_TAG = "v5_fee_aware_side_liquidity"
+BUILD_TAG = "v5.3.2026-03-02.001"
+ENGINE_TAG = "v5_scalein_groups"
 STATE_PATH = os.path.join(os.path.dirname(__file__), "runtime", "state_v5.json")
 
 
@@ -248,6 +251,20 @@ def init_db():
             c.execute("ALTER TABLE trades ADD COLUMN fill_retries INTEGER")
         if "peak_price" not in cols:
             c.execute("ALTER TABLE trades ADD COLUMN peak_price REAL")
+        if "avg_entry" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN avg_entry REAL")
+        if "scale_in_count" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN scale_in_count INTEGER DEFAULT 0")
+        if "parent_trade_id" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN parent_trade_id INTEGER")
+        if "entry_tier" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN entry_tier INTEGER DEFAULT 1")
+        if "is_scale_in" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN is_scale_in INTEGER DEFAULT 0")
+        if "scale_group_id" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN scale_group_id TEXT")
+        if "scale_trigger_note" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN scale_trigger_note TEXT")
 
         conn.commit()
         conn.close()
@@ -303,13 +320,15 @@ def open_positions_this_round(slug: str) -> int:
     return n
 
 
-def log_trade(slug: str, market_id: str, side: str, entry: float, size: float, edge: float, note: str, trade_token_id: str | None, entry_source: str):
+def log_trade(slug: str, market_id: str, side: str, entry: float, size: float, edge: float, note: str, trade_token_id: str | None, entry_source: str,
+              parent_trade_id: int | None = None, entry_tier: int = 1, is_scale_in: int = 0,
+              scale_group_id: str | None = None, scale_trigger_note: str | None = None, scale_in_count: int = 0):
     try:
         conn = sqlite3.connect(DB)
         c = conn.cursor()
         c.execute(
-            "INSERT INTO trades (ts, slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, remaining_size, partial_tp_done, peak_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (datetime.now(UTC).isoformat(), slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, size, 0, entry),
+            "INSERT INTO trades (ts, slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, remaining_size, partial_tp_done, peak_price, avg_entry, scale_in_count, parent_trade_id, entry_tier, is_scale_in, scale_group_id, scale_trigger_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.now(UTC).isoformat(), slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, size, 0, entry, entry, int(scale_in_count), parent_trade_id, int(entry_tier), int(is_scale_in), scale_group_id, scale_trigger_note),
         )
         conn.commit()
         conn.close()
@@ -527,6 +546,69 @@ def candidate_score(spread: float | None, depth: float, imbalance: float, in_ban
     if strong_ok:
         score += 250.0
     return score
+
+
+def find_open_group(slug: str, side: str):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    row = c.execute(
+        """
+        SELECT
+            COALESCE(scale_group_id, CAST(MIN(id) AS TEXT)) AS scale_group_id,
+            MIN(COALESCE(parent_trade_id, id)) AS parent_trade_id,
+            SUM(COALESCE(remaining_size, size)) AS total_open_size,
+            SUM(COALESCE(remaining_size, size) * entry) AS total_cost,
+            CASE WHEN SUM(COALESCE(remaining_size, size)) > 0
+                 THEN SUM(COALESCE(remaining_size, size) * entry) / SUM(COALESCE(remaining_size, size))
+                 ELSE NULL END AS avg_entry_calc,
+            MAX(COALESCE(scale_in_count, 0)) AS scale_in_count
+        FROM trades
+        WHERE slug = ? AND side = ? AND closed_ts IS NULL
+        """,
+        (slug, side),
+    ).fetchone()
+    conn.close()
+    if not row or row[0] is None:
+        return None
+    return {
+        "scale_group_id": str(row[0]),
+        "parent_trade_id": int(row[1]) if row[1] is not None else None,
+        "total_open_size": float(row[2] or 0.0),
+        "avg_entry_calc": float(row[4]) if row[4] is not None else None,
+        "scale_in_count": int(row[5] or 0),
+    }
+
+
+def recompute_group_avg_entry(slug: str, side: str):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute(
+        """
+        UPDATE trades
+        SET avg_entry = (
+            SELECT CASE WHEN SUM(COALESCE(remaining_size, size)) > 0
+                        THEN SUM(COALESCE(remaining_size, size) * entry) / SUM(COALESCE(remaining_size, size))
+                        ELSE NULL END
+            FROM trades t2
+            WHERE t2.slug = trades.slug AND t2.side = trades.side AND t2.closed_ts IS NULL
+        )
+        WHERE slug = ? AND side = ? AND closed_ts IS NULL
+        """,
+        (slug, side),
+    )
+    conn.commit()
+    conn.close()
+
+
+def increment_group_scale_count(slug: str, side: str):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trades SET scale_in_count = COALESCE(scale_in_count, 0) + 1 WHERE slug = ? AND side = ? AND closed_ts IS NULL",
+        (slug, side),
+    )
+    conn.commit()
+    conn.close()
 
 
 def can_add_same_side_entry(slug: str, side: str, candidate_entry: float) -> tuple[bool, str]:
@@ -1320,11 +1402,37 @@ def main():
                 time.sleep(LOOP_SECONDS)
                 continue
 
-            allow_entry, block_reason = can_add_same_side_entry(market.slug, side, float(entry))
-            if not allow_entry:
-                vprint(f"No trade | {block_reason}")
-                time.sleep(LOOP_SECONDS)
-                continue
+            group = find_open_group(market.slug, side)
+            is_scale_in = 0
+            parent_trade_id = None
+            entry_tier = 1
+            scale_group_id = None
+            scale_trigger_note = None
+            scale_in_count_for_insert = 0
+
+            if group and SCALE_IN_ENABLED:
+                avg_entry_grp = float(group.get("avg_entry_calc") or entry)
+                grp_count = int(group.get("scale_in_count") or 0)
+                if grp_count >= MAX_SCALE_INS_PER_GROUP:
+                    vprint(f"No trade | scale-in cap reached {grp_count}/{MAX_SCALE_INS_PER_GROUP}")
+                    time.sleep(LOOP_SECONDS)
+                    continue
+                if float(entry) > (avg_entry_grp - SCALE_IN_MIN_IMPROVEMENT):
+                    vprint(f"No trade | scale-in not improved (avg={avg_entry_grp:.3f}, now={float(entry):.3f})")
+                    time.sleep(LOOP_SECONDS)
+                    continue
+                is_scale_in = 1
+                parent_trade_id = int(group.get("parent_trade_id") or 0) or None
+                entry_tier = grp_count + 2
+                scale_group_id = str(group.get("scale_group_id") or "")
+                scale_trigger_note = f"improved_entry>={SCALE_IN_MIN_IMPROVEMENT:.3f}"
+                scale_in_count_for_insert = grp_count
+            else:
+                allow_entry, block_reason = can_add_same_side_entry(market.slug, side, float(entry))
+                if not allow_entry:
+                    vprint(f"No trade | {block_reason}")
+                    time.sleep(LOOP_SECONDS)
+                    continue
 
             balance_now = current_balance_realized_only()
             risk_mult = 1.0
@@ -1344,7 +1452,14 @@ def main():
                 f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f} "
                 f"source={entry_source} bal={balance_now:.2f} risk={risk:.2f} mult={risk_mult:.2f}"
             )
-            log_trade(market.slug, market.market_id, side, entry, size, edge, note, trade_token_id, entry_source)
+            log_trade(
+                market.slug, market.market_id, side, entry, size, edge, note, trade_token_id, entry_source,
+                parent_trade_id=parent_trade_id, entry_tier=entry_tier, is_scale_in=is_scale_in,
+                scale_group_id=scale_group_id, scale_trigger_note=scale_trigger_note, scale_in_count=scale_in_count_for_insert,
+            )
+            if is_scale_in:
+                recompute_group_avg_entry(market.slug, side)
+                increment_group_scale_count(market.slug, side)
             side_txt = "UP" if side == "BUY_YES" else "DOWN"
             print(f"BUY {side_txt} | entry={entry:.4f} | size={size:.2f}")
             write_state(f"BUY {side_txt} entry={entry:.4f}")
