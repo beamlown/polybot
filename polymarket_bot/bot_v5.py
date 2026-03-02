@@ -34,6 +34,10 @@ GROUP_TAKE_PROFIT_PCT = float(os.getenv("GROUP_TAKE_PROFIT_PCT", "0.30"))
 BREAKEVEN_AFTER_PARTIAL = os.getenv("BREAKEVEN_AFTER_PARTIAL", "true").strip().lower() in ("1", "true", "yes", "on")
 BREAKEVEN_BUFFER_PCT = float(os.getenv("BREAKEVEN_BUFFER_PCT", "0.01"))
 AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
+TRAILING_STOP_AFTER_PARTIAL_PCT = float(os.getenv("TRAILING_STOP_AFTER_PARTIAL_PCT", "0.08"))
+TIME_STOP_SECONDS = int(os.getenv("TIME_STOP_SECONDS", "120"))
+TIME_STOP_MAX_PNL_PCT = float(os.getenv("TIME_STOP_MAX_PNL_PCT", "0.02"))
+STOP_LOSS_FINAL_MINUTE_ONLY = os.getenv("STOP_LOSS_FINAL_MINUTE_ONLY", "true").strip().lower() in ("1", "true", "yes", "on")
 MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
 STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
 STOP_LOSS_ARMING_DELAY_SECONDS = int(os.getenv("STOP_LOSS_ARMING_DELAY_SECONDS", "15"))
@@ -242,6 +246,8 @@ def init_db():
             c.execute("ALTER TABLE trades ADD COLUMN fill_delay_ms INTEGER")
         if "fill_retries" not in cols:
             c.execute("ALTER TABLE trades ADD COLUMN fill_retries INTEGER")
+        if "peak_price" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN peak_price REAL")
 
         conn.commit()
         conn.close()
@@ -302,8 +308,8 @@ def log_trade(slug: str, market_id: str, side: str, entry: float, size: float, e
         conn = sqlite3.connect(DB)
         c = conn.cursor()
         c.execute(
-            "INSERT INTO trades (ts, slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, remaining_size, partial_tp_done) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (datetime.now(UTC).isoformat(), slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, size, 0),
+            "INSERT INTO trades (ts, slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, remaining_size, partial_tp_done, peak_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.now(UTC).isoformat(), slug, market_id, side, entry, size, edge, note, trade_token_id, entry_source, size, 0, entry),
         )
         conn.commit()
         conn.close()
@@ -632,15 +638,15 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
     if is_stale_quote(quote_ts):
         print(f"STALE_QUOTE_SKIP | action=stop_loss | slug={slug}")
         return 0
-    # Apply stop logic only in final minute of the round (user preference).
-    if eta_seconds is None or eta_seconds > 60:
+    # Optional final-minute-only stop logic (legacy behavior).
+    if STOP_LOSS_FINAL_MINUTE_ONLY and (eta_seconds is None or eta_seconds > 60):
         return 0
 
     conn = sqlite3.connect(DB)
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, ts, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done, 0) AS ptd
+        SELECT id, ts, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done, 0) AS ptd, COALESCE(peak_price, entry) AS peak
         FROM trades
         WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
         ORDER BY id ASC
@@ -652,7 +658,7 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
     stop_yes = False
     stop_no = False
     now_utc = datetime.now(UTC)
-    for _, ts_raw, side, entry, _, ptd in rows:
+    for tid0, ts_raw, side, entry, size0, ptd, peak in rows:
         try:
             opened = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
             if opened.tzinfo is None:
@@ -663,17 +669,38 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
             continue
 
         entry = float(entry)
+        mark = sell_yes_px if side == "BUY_YES" else sell_no_px
+        if mark is None:
+            continue
+
+        # keep peak mark updated for trailing logic after partial TP
+        peak_now = max(float(peak or entry), float(mark))
+        c.execute("UPDATE trades SET peak_price=? WHERE id=?", (peak_now, int(tid0)))
+
         floor = entry * (1.0 - AUTO_STOP_LOSS_PCT)
         if BREAKEVEN_AFTER_PARTIAL and int(ptd) == 1:
             floor = max(floor, entry * (1.0 + BREAKEVEN_BUFFER_PCT))
-        if side == "BUY_YES" and sell_yes_px is not None and sell_yes_px <= floor:
+            if TRAILING_STOP_AFTER_PARTIAL_PCT > 0:
+                floor = max(floor, peak_now * (1.0 - TRAILING_STOP_AFTER_PARTIAL_PCT))
+
+        # time stop: after holding long enough, close if not making enough progress
+        age_s = (now_utc - opened).total_seconds()
+        pnl_pct = (float(mark) - entry) / max(entry, 1e-9)
+        if TIME_STOP_SECONDS > 0 and age_s >= TIME_STOP_SECONDS and pnl_pct <= TIME_STOP_MAX_PNL_PCT:
+            if side == "BUY_YES":
+                stop_yes = True
+            else:
+                stop_no = True
+            continue
+
+        if side == "BUY_YES" and float(mark) <= floor:
             stop_yes = True
-        elif side == "BUY_NO" and sell_no_px is not None and sell_no_px <= floor:
+        elif side == "BUY_NO" and float(mark) <= floor:
             stop_no = True
 
     closed = 0
     now_iso = datetime.now(UTC).isoformat()
-    for tid, ts_raw, side, entry, size, ptd in rows:
+    for tid, ts_raw, side, entry, size, ptd, peak in rows:
         if side == "BUY_YES" and not stop_yes:
             continue
         if side == "BUY_NO" and not stop_no:
@@ -951,7 +978,7 @@ def main():
     print(f"BOOT | engine={ENGINE_TAG} | build={BUILD_TAG} | file={os.path.abspath(__file__)}")
     print(
         f"CONFIG | edge={MIN_EDGE:.3f} prob_delta={MIN_PROB_DISTANCE:.3f} side_adv={MIN_SIDE_ADVANTAGE:.3f} "
-        f"sl={AUTO_STOP_LOSS_PCT:.2f} tp={AUTO_TAKE_PROFIT_PCT:.2f} partial={PARTIAL_TP_TRIGGER_PCT:.2f}/{PARTIAL_TP_SELL_FRACTION:.2f} "
+        f"sl={AUTO_STOP_LOSS_PCT:.2f} tp={AUTO_TAKE_PROFIT_PCT:.2f} partial={PARTIAL_TP_TRIGGER_PCT:.2f}/{PARTIAL_TP_SELL_FRACTION:.2f} trail={TRAILING_STOP_AFTER_PARTIAL_PCT:.2f} tstop={TIME_STOP_SECONDS}s/{TIME_STOP_MAX_PNL_PCT:.2f} "
         f"entries_round={MAX_ENTRIES_PER_ROUND} same_side_open_cap={MAX_SAME_SIDE_OPEN_PER_ROUND} prefixes={','.join(SERIES_PREFIXES)} max_conc={MAX_CONCURRENT_TRADES} "
         f"window={ENTRY_WINDOW_START_SECONDS}-{ENTRY_WINDOW_END_SECONDS}s loop={LOOP_SECONDS}s stop_cooldown={STOPLOSS_REENTRY_COOLDOWN_SECONDS}s"
     )
