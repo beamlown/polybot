@@ -129,15 +129,17 @@ def get_clob_buy_up_down(slug: str, cache: Dict[str, Dict[str, Any]], clob_clien
     return buy_up, buy_down
 
 
-def get_price_views(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> tuple[float | None, float | None, float | None, float | None]:
+def get_price_views(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> tuple[float | None, float | None, float | None, float | None, float | None, float | None]:
     m = get_market(slug, cache)
     if m is None:
-        return None, None, None, None
+        return None, None, None, None, None, None
 
     yes_bid, yes_ask, yes_last = _extract_yes_prices(m)
 
     buy_up = yes_ask if yes_ask is not None else yes_last
+    sell_up = yes_bid if yes_bid is not None else yes_last
     buy_down = (1.0 - yes_bid) if yes_bid is not None else ((1.0 - yes_last) if yes_last is not None else None)
+    sell_down = (1.0 - yes_ask) if yes_ask is not None else ((1.0 - yes_last) if yes_last is not None else None)
 
     # UI-ish mark: last/outcome-based
     ui_mark = yes_last if side == "BUY_YES" else ((1.0 - yes_last) if yes_last is not None else None)
@@ -148,7 +150,7 @@ def get_price_views(slug: str, side: str, cache: Dict[str, Dict[str, Any]]) -> t
     else:
         exec_mark = (1.0 - yes_ask) if yes_ask is not None else ((1.0 - yes_last) if yes_last is not None else None)
 
-    return ui_mark, exec_mark, buy_up, buy_down
+    return ui_mark, exec_mark, buy_up, sell_up, buy_down, sell_down
 
 
 if not DB.exists():
@@ -199,7 +201,7 @@ print("=" * 146)
 print(f"Total entries in DB: {count}")
 print("Legend: BUY_YES = bought UP (YES), BUY_NO = bought DOWN (NO)")
 print("-" * 146)
-print(f"{'ID':<5} {'Status':<8} {'Round':<26} {'Bet':<18} {'Entry':<10} {'UI Mark':<10} {'Exec Mark':<10} {'Buy UP':<10} {'Buy DOWN':<10} {'Size':<8} {'PnL $':<12} {'PnL %':<8}")
+print(f"{'ID':<5} {'Status':<8} {'Round':<26} {'Bet':<18} {'Entry':<10} {'UI Mark':<10} {'Sell Mark':<10} {'Buy UP':<10} {'Sell UP':<10} {'Buy DOWN':<10} {'Sell DOWN':<10} {'Size':<8} {'PnL $':<12} {'PnL %':<8}")
 print("-" * 146)
 
 open_unrealized_total = 0.0
@@ -243,7 +245,9 @@ for r in rows:
         ui_txt = c("closed", YLW)
         exec_txt = c("closed", YLW)
         buy_up_txt = c("-", YLW)
+        sell_up_txt = c("-", YLW)
         buy_down_txt = c("-", YLW)
+        sell_down_txt = c("-", YLW)
         pnl = realized_pnl
         pnl_pct = (pnl / (entry * size) * 100.0) if entry > 0 and size > 0 else 0.0
         realized_total += pnl
@@ -252,12 +256,16 @@ for r in rows:
         pnl_pct_txt = c(f"{pnl_pct:+.1f}%", color)
     else:
         status = c("OPEN", CYN)
-        ui_px, exec_px, buy_up_px, buy_down_px = get_price_views(slug, side, market_cache)
+        ui_px, exec_px, buy_up_px, sell_up_px, buy_down_px, sell_down_px = get_price_views(slug, side, market_cache)
         clob_buy_up, clob_buy_down = get_clob_buy_up_down(slug, market_cache, clob)
         if clob_buy_up is not None:
             buy_up_px = clob_buy_up
         if clob_buy_down is not None:
             buy_down_px = clob_buy_down
+
+        # Derive sell columns from live buy where possible (same quote family view)
+        sell_up_px = exec_px if sell_up_px is None else sell_up_px
+        sell_down_px = (1.0 - buy_up_px) if (sell_down_px is None and buy_up_px is not None) else sell_down_px
 
         # Align mark with the same live quote family shown in Buy UP/Buy DOWN columns.
         if side == "BUY_YES" and buy_up_px is not None:
@@ -272,7 +280,9 @@ for r in rows:
                     exec_px = clob_exec
         ui_txt = c("n/a", YLW) if ui_px is None else c(format_cents(ui_px), WHT)
         buy_up_txt = c("n/a", YLW) if buy_up_px is None else c(format_cents(buy_up_px), CYN)
+        sell_up_txt = c("n/a", YLW) if sell_up_px is None else c(format_cents(sell_up_px), WHT)
         buy_down_txt = c("n/a", YLW) if buy_down_px is None else c(format_cents(buy_down_px), CYN)
+        sell_down_txt = c("n/a", YLW) if sell_down_px is None else c(format_cents(sell_down_px), WHT)
 
         if exec_px is None:
             exec_txt = c("n/a", YLW)
@@ -285,10 +295,14 @@ for r in rows:
             priced_open_rows += 1
             color = GRN if pnl >= 0 else RED
             exec_txt = c(format_cents(exec_px), color)
+            if sell_up_px is not None:
+                sell_up_txt = c(format_cents(sell_up_px), color if side == "BUY_YES" else WHT)
+            if sell_down_px is not None:
+                sell_down_txt = c(format_cents(sell_down_px), color if side == "BUY_NO" else WHT)
             pnl_txt = c(f"{pnl:+.2f}", color)
             pnl_pct_txt = c(f"{pnl_pct:+.1f}%", color)
 
-    print(f"{trade_id:<5} {status:<8} {slug[:26]:<26} {bet_text:<18} {format_cents(entry):<10} {ui_txt:<10} {exec_txt:<10} {buy_up_txt:<10} {buy_down_txt:<10} {size:<8.2f} {pnl_txt:<12} {pnl_pct_txt:<8}")
+    print(f"{trade_id:<5} {status:<8} {slug[:26]:<26} {bet_text:<18} {format_cents(entry):<10} {ui_txt:<10} {exec_txt:<10} {buy_up_txt:<10} {sell_up_txt:<10} {buy_down_txt:<10} {sell_down_txt:<10} {size:<8.2f} {pnl_txt:<12} {pnl_pct_txt:<8}")
 
 print("-" * 146)
 rt_color = GRN if realized_total >= 0 else RED
