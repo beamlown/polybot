@@ -976,7 +976,10 @@ def maybe_auto_force_flatten_before_expiry(slug: str, eta_seconds: int | None, s
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done,0) AS ptd`n        FROM trades`n        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0`n        ORDER BY id ASC
+        SELECT id, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done,0) AS ptd
+        FROM trades
+        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
+        ORDER BY id ASC
         """,
         (slug,),
     ).fetchall()
@@ -1020,7 +1023,10 @@ def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done,0) AS ptd`n        FROM trades`n        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0`n        ORDER BY id ASC
+        SELECT id, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done,0) AS ptd
+        FROM trades
+        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
+        ORDER BY id ASC
         """,
         (slug,),
     ).fetchall()
