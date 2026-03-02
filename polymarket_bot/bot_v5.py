@@ -893,7 +893,8 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
 def maybe_auto_force_flatten_before_expiry(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None, quote_ts: datetime | None = None) -> int:
     if FORCE_FLAT_BEFORE_EXPIRY_SECONDS <= 0:
         return 0
-    if eta_seconds is None or eta_seconds > FORCE_FLAT_BEFORE_EXPIRY_SECONDS or eta_seconds <= 0:
+    trigger_sec = max(1, min(FORCE_FLAT_BEFORE_EXPIRY_SECONDS, RUNNER_EXPIRY_CLOSE_SEC))
+    if eta_seconds is None or eta_seconds > trigger_sec or eta_seconds <= 0:
         return 0
     if is_stale_quote(quote_ts):
         print(f"STALE_QUOTE_SKIP | action=pre_expiry_flatten | slug={slug}")
@@ -903,17 +904,14 @@ def maybe_auto_force_flatten_before_expiry(slug: str, eta_seconds: int | None, s
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, side, entry, COALESCE(remaining_size, size) AS size
-        FROM trades
-        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
-        ORDER BY id ASC
+        SELECT id, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done,0) AS ptd`n        FROM trades`n        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0`n        ORDER BY id ASC
         """,
         (slug,),
     ).fetchall()
 
     closed = 0
     now_iso = datetime.now(UTC).isoformat()
-    for tid, side, entry, size in rows:
+    for tid, side, entry, size, ptd in rows:
         entry = float(entry)
         size = float(size)
         close_price = sell_yes_px if side == "BUY_YES" else sell_no_px
@@ -922,13 +920,17 @@ def maybe_auto_force_flatten_before_expiry(slug: str, eta_seconds: int | None, s
         trigger = float(close_price)
         fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=40.0)
         pnl = (fill - entry) * size
+        close_note = "runner_expiry_close" if int(ptd) == 1 else "pre_expiry_auto_close"
         c.execute(
             "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0, exit_trigger_price = ?, exit_fill_price = ?, slippage_ticks = ?, fill_delay_ms = ?, fill_retries = ? WHERE id = ?",
-            (now_iso, float(fill), "pre_expiry_auto_close", float(pnl), trigger, float(fill), float(slip_ticks), int(delay_ms), int(retries), int(tid)),
+            (now_iso, float(fill), close_note, float(pnl), trigger, float(fill), float(slip_ticks), int(delay_ms), int(retries), int(tid)),
         )
         closed += 1
         side_txt = "UP" if side == "BUY_YES" else "DOWN"
-        print(f"SELL PRE_EXPIRY | {side_txt} | id={tid} | eta={eta_seconds}s | pnl={pnl:+.2f}")
+        if int(ptd) == 1:
+            print(f"RUNNER_CLOSE | id={tid} token={side_txt} reason=expiry eta={eta_seconds}s pnl={pnl:+.2f}")
+        else:
+            print(f"SELL PRE_EXPIRY | {side_txt} | id={tid} | eta={eta_seconds}s | pnl={pnl:+.2f}")
 
     conn.commit()
     conn.close()
@@ -946,17 +948,14 @@ def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_
     c = conn.cursor()
     rows = c.execute(
         """
-        SELECT id, side, entry, COALESCE(remaining_size, size) AS size
-        FROM trades
-        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
-        ORDER BY id ASC
+        SELECT id, side, entry, COALESCE(remaining_size, size) AS size, COALESCE(partial_tp_done,0) AS ptd`n        FROM trades`n        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0`n        ORDER BY id ASC
         """,
         (slug,),
     ).fetchall()
 
     closed = 0
     now_iso = datetime.now(UTC).isoformat()
-    for tid, side, entry, size in rows:
+    for tid, side, entry, size, ptd in rows:
         entry = float(entry)
         size = float(size)
         close_price = sell_yes_px if side == "BUY_YES" else sell_no_px
@@ -1553,5 +1552,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
