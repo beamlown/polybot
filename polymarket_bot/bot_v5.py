@@ -123,6 +123,33 @@ def is_stale_quote(quote_ts: datetime | None) -> bool:
         return False
 
 
+def quote_mark_for_open(slug: str, side: str, ob: OBReader | None = None) -> float | None:
+    try:
+        pref = _series_prefix_from_slug(str(slug))
+        market, derr = discover(pref, ROUND_MINUTES, force_slug=str(slug))
+        if derr or market is None:
+            return None
+
+        if side == "BUY_YES":
+            if ob is not None and market.yes_token_id:
+                b, e = ob.read(market.yes_token_id)
+                if e is None and b is not None and b.best_bid is not None:
+                    return float(b.best_bid)
+            return float(market.yes_price) if market.yes_price is not None else None
+
+        if side == "BUY_NO":
+            if ob is not None and market.no_token_id:
+                b, e = ob.read(market.no_token_id)
+                if e is None and b is not None and b.best_bid is not None:
+                    return float(b.best_bid)
+            if market.yes_price is not None:
+                return max(0.0, min(1.0, 1.0 - float(market.yes_price)))
+            return None
+    except Exception:
+        return None
+    return None
+
+
 def unrealized_pnl_estimate() -> float:
     try:
         conn = sqlite3.connect(DB)
@@ -143,20 +170,13 @@ def unrealized_pnl_estimate() -> float:
             by_slug.setdefault(str(slug), []).append((str(side), float(entry), float(rem)))
 
         total = 0.0
+        ob = OBReader()
         for slug, legs in by_slug.items():
-            try:
-                i = slug.rfind("-5m-")
-                pref = slug[:i] if i > 0 else SERIES_PREFIX
-            except Exception:
-                pref = SERIES_PREFIX
-            market, derr = discover(pref, ROUND_MINUTES, force_slug=slug)
-            if derr or market is None or market.yes_price is None:
-                continue
-            yes_mark = float(market.yes_price)
-            no_mark = max(0.0, min(1.0, 1.0 - yes_mark))
             for side, entry, rem in legs:
-                mark = yes_mark if side == "BUY_YES" else no_mark
-                total += (mark - entry) * rem
+                mark = quote_mark_for_open(slug, side, ob)
+                if mark is None:
+                    continue
+                total += (float(mark) - entry) * rem
         return float(total)
     except Exception:
         return 0.0
@@ -177,16 +197,9 @@ def write_state(status_line: str = ""):
         open_rows = c.execute("SELECT id,slug,side,entry,COALESCE(remaining_size,size) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0 ORDER BY id DESC LIMIT 8").fetchall()
 
         open_with_pnl = []
+        ob_live = OBReader()
         for rid, rslug, rside, rentry, rrem in open_rows:
-            mark = None
-            try:
-                pref = _series_prefix_from_slug(str(rslug))
-                mkt, derr = discover(pref, ROUND_MINUTES, force_slug=str(rslug))
-                if not derr and mkt is not None and mkt.yes_price is not None:
-                    yes_m = float(mkt.yes_price)
-                    mark = yes_m if str(rside) == "BUY_YES" else max(0.0, min(1.0, 1.0 - yes_m))
-            except Exception:
-                mark = None
+            mark = quote_mark_for_open(str(rslug), str(rside), ob_live)
             rpnl = ((float(mark) - float(rentry)) * float(rrem)) if mark is not None else None
             open_with_pnl.append((rid, rslug, rside, float(rentry), float(rrem), mark, rpnl))
         recent = c.execute("SELECT id,slug,side,COALESCE(close_note,'n/a'),COALESCE(realized_pnl,0), COALESCE(entry,0), COALESCE(close_price, entry) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT 10").fetchall()
