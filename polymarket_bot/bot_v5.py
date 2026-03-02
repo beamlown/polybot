@@ -64,6 +64,7 @@ RISK_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "0.005"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.03"))
 MIN_DEPTH_TOP5 = float(os.getenv("MIN_DEPTH_TOP5", "50"))
 LOOP_SECONDS = int(os.getenv("LOOP_SECONDS", "5"))
+QUIET_LOGGING = os.getenv("QUIET_LOGGING", "true").strip().lower() in ("1", "true", "yes", "on")
 MIN_SECONDS_TO_EXPIRY = int(os.getenv("MIN_SECONDS_TO_EXPIRY", "0"))
 ENTRY_WINDOW_START_SECONDS = int(os.getenv("ENTRY_WINDOW_START_SECONDS", "0"))
 ENTRY_WINDOW_END_SECONDS = int(os.getenv("ENTRY_WINDOW_END_SECONDS", "999999"))
@@ -74,6 +75,11 @@ BUILD_TAG = "v5.2026-03-01.001"
 def die(code: int, msg: str):
     print(fmt(code, msg))
     sys.exit(code)
+
+
+def vprint(msg: str):
+    if not QUIET_LOGGING:
+        print(msg)
 
 
 def init_db():
@@ -256,7 +262,8 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
                     (rem_after, "partial_take_profit", float(pnl_partial), int(tid)),
                 )
                 net = realized_net_pnl() + pnl_partial
-                print(f"ALERT PARTIAL_TP | id={tid} side={side} sold={qty:.2f}/{rem:.2f} close={float(close_price):.4f} pnl={pnl_partial:+.2f} net_realized~={net:+.2f}")
+                side_txt = "UP" if side == "BUY_YES" else "DOWN"
+                print(f"SELL TP(partial) | {side_txt} | id={tid} | sold={qty:.2f}/{rem:.2f} | pnl={pnl_partial:+.2f}")
                 rem = rem_after
 
         # 2) Full close remainder at standard TP or absolute price target.
@@ -270,7 +277,8 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
             )
             closed += 1
             net = realized_net_pnl() + pnl
-            print(f"ALERT TAKE_PROFIT | id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
+            side_txt = "UP" if side == "BUY_YES" else "DOWN"
+            print(f"SELL TP | {side_txt} | id={tid} | pnl={pnl:+.2f}")
 
     conn.commit()
     conn.close()
@@ -547,7 +555,8 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
         )
         closed += 1
         net = realized_net_pnl() + pnl
-        print(f"ALERT STOP_LOSS | id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
+        side_txt = "UP" if side == "BUY_YES" else "DOWN"
+        print(f"SELL SL | {side_txt} | id={tid} | pnl={pnl:+.2f}")
 
     conn.commit()
     conn.close()
@@ -585,7 +594,8 @@ def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_
         )
         closed += 1
         net = realized_net_pnl() + pnl
-        print(f"ALERT ROUND_EXPIRY_CLOSE | id={tid} side={side} entry={entry:.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
+        side_txt = "UP" if side == "BUY_YES" else "DOWN"
+        print(f"SELL EXPIRY | {side_txt} | id={tid} | pnl={pnl:+.2f}")
 
     conn.commit()
     conn.close()
@@ -713,7 +723,7 @@ def main():
 
             day_count = trades_today()
             if MAX_TRADES_PER_DAY > 0 and day_count >= MAX_TRADES_PER_DAY:
-                print(f"No trade | daily cap {day_count}/{MAX_TRADES_PER_DAY}")
+                vvprint(f"No trade | daily cap {day_count}/{MAX_TRADES_PER_DAY}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -724,17 +734,17 @@ def main():
                 market, derr = discover(pref, ROUND_MINUTES, force_slug=current_force_slug or None)
                 if derr or market is None:
                     if derr:
-                        print(f"CANDIDATE_FAIL | prefix={pref} | {derr}")
+                        vprint(f"CANDIDATE_FAIL | prefix={pref} | {derr}")
                     continue
 
                 # Token/outcome sanity
                 if not market.yes_token_id or not market.no_token_id:
-                    print(f"CANDIDATE_FAIL | prefix={pref} | slug={market.slug} | reason=missing_token_ids")
+                    vprint(f"CANDIDATE_FAIL | prefix={pref} | slug={market.slug} | reason=missing_token_ids")
                     continue
 
                 book, berr = ob.read(market.yes_token_id)
                 if berr:
-                    print(f"CANDIDATE_FAIL | prefix={pref} | slug={market.slug} | reason=clob_quote_fail")
+                    vprint(f"CANDIDATE_FAIL | prefix={pref} | slug={market.slug} | reason=clob_quote_fail")
                     continue
 
                 spread = book.spread
@@ -765,7 +775,7 @@ def main():
 
                 weak_top = (top_bid_usd >= MIN_TOP_BOOK_USD and top_ask_usd >= MIN_TOP_BOOK_USD)
                 strong_top = (top_bid_usd >= TOP_BOOK_STRONG_USD and top_ask_usd >= TOP_BOOK_STRONG_USD)
-                print(
+                vprint(
                     f"CANDIDATE | prefix={pref} slug={market.slug} suffix={market.suffix} market_id={market.market_id} "
                     f"bid={yes_bid} ask={yes_ask} spread={spread} depth={depth:.1f} top_bid_usd={top_bid_usd:.1f} top_ask_usd={top_ask_usd:.1f} "
                     f"top_bonus={'strong' if strong_top else ('weak' if weak_top else 'none')} vol24h={market.volume24h} gate={gate_ok} reason={fail_reason or 'ok'}"
@@ -785,7 +795,7 @@ def main():
             candidates.sort(key=lambda x: x[0], reverse=True)
             available_slots = max(0, MAX_CONCURRENT_TRADES - open_positions_total())
             if available_slots <= 0:
-                print(f"SELECTED | n=0 reason=no_available_slots max_concurrent={MAX_CONCURRENT_TRADES}")
+                vprint(f"SELECTED | n=0 reason=no_available_slots max_concurrent={MAX_CONCURRENT_TRADES}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -803,12 +813,12 @@ def main():
                     break
 
             if not selected:
-                print("SELECTED | n=0 reason=all_candidates_blocked_by_slug_cap_or_keys")
+                vprint("SELECTED | n=0 reason=all_candidates_blocked_by_slug_cap_or_keys")
                 time.sleep(LOOP_SECONDS)
                 continue
 
             picked_txt = ", ".join([f"{x[1]}:{x[2].slug}:{x[0]:.1f}" for x in selected])
-            print(f"SELECTED | n={len(selected)} -> {picked_txt}")
+            vprint(f"SELECTED | n={len(selected)} -> {picked_txt}")
 
             # Current execution path processes one candidate per loop (highest-ranked selected).
             _, chosen_prefix, market, book = selected[0]
@@ -881,11 +891,11 @@ def main():
             )
 
             if eta_now is not None and eta_now < MIN_SECONDS_TO_EXPIRY:
-                print(f"No trade | too close to expiry ({eta_now}s < {MIN_SECONDS_TO_EXPIRY}s)")
+                vprint(f"No trade | too close to expiry ({eta_now}s < {MIN_SECONDS_TO_EXPIRY}s)")
                 time.sleep(LOOP_SECONDS)
                 continue
             if elapsed is not None and (elapsed < ENTRY_WINDOW_START_SECONDS or elapsed > ENTRY_WINDOW_END_SECONDS):
-                print(f"No trade | outside entry window ({elapsed}s, allowed {ENTRY_WINDOW_START_SECONDS}-{ENTRY_WINDOW_END_SECONDS}s)")
+                vprint(f"No trade | outside entry window ({elapsed}s, allowed {ENTRY_WINDOW_START_SECONDS}-{ENTRY_WINDOW_END_SECONDS}s)")
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -893,7 +903,7 @@ def main():
                 eta = eta_now
                 eta_safe = max(0, eta) if eta is not None else None
                 eta_txt = f" | next in {eta_safe}s" if eta_safe is not None else ""
-                print(f"Round: {market.slug} | No trade | slug cap {MAX_TRADES_PER_SLUG}{eta_txt}")
+                vprint(f"Round: {market.slug} | No trade | slug cap {MAX_TRADES_PER_SLUG}{eta_txt}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -902,7 +912,7 @@ def main():
                 eta = eta_now
                 eta_safe = max(0, eta) if eta is not None else None
                 eta_txt = f" | next in {eta_safe}s" if eta_safe is not None else ""
-                print(f"Round: {market.slug} | No trade | open cap {round_count}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
+                vprint(f"Round: {market.slug} | No trade | open cap {round_count}/{MAX_ENTRIES_PER_ROUND}{eta_txt}")
 
                 # If pinned slug is already expired, roll to next round automatically.
                 if current_force_slug and AUTO_ROLL_FORCE_SLUG and eta is not None and eta < 0:
@@ -915,23 +925,23 @@ def main():
                 continue
 
             if spread is not None and spread > MAX_SPREAD:
-                print("No trade | spread too wide")
+                vprint("No trade | spread too wide")
                 time.sleep(LOOP_SECONDS)
                 continue
             if depth < MIN_DEPTH_TOP5:
-                print("No trade | depth too thin")
+                vprint("No trade | depth too thin")
                 time.sleep(LOOP_SECONDS)
                 continue
             if has_recent_stoploss(market.slug):
-                print(f"No trade | stop-loss cooldown active ({STOPLOSS_REENTRY_COOLDOWN_SECONDS}s)")
+                vprint(f"No trade | stop-loss cooldown active ({STOPLOSS_REENTRY_COOLDOWN_SECONDS}s)")
                 time.sleep(LOOP_SECONDS)
                 continue
             if not (ENTRY_PRICE_FLOOR <= buy_yes_px <= ENTRY_PRICE_CEIL):
-                print(f"No trade | buy_yes out of range ({buy_yes_px:.3f})")
+                vprint(f"No trade | buy_yes out of range ({buy_yes_px:.3f})")
                 time.sleep(LOOP_SECONDS)
                 continue
             if not (ENTRY_PRICE_FLOOR <= buy_no_px <= ENTRY_PRICE_CEIL):
-                print(f"No trade | buy_no out of range ({buy_no_px:.3f})")
+                vprint(f"No trade | buy_no out of range ({buy_no_px:.3f})")
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -942,7 +952,7 @@ def main():
             # Directional guard: only take side aligned with forecast, and skip weak 50/50 forecasts.
             prob_delta = abs(prob - 0.5)
             if prob_delta < MIN_PROB_DISTANCE:
-                print(f"No trade | forecast too close to 50/50 (prob={prob:.3f}, min_delta={MIN_PROB_DISTANCE:.3f})")
+                vprint(f"No trade | forecast too close to 50/50 (prob={prob:.3f}, min_delta={MIN_PROB_DISTANCE:.3f})")
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -1015,18 +1025,18 @@ def main():
                 continue
 
             if has_open_opposite_side(market.slug, side):
-                print("No trade | opposite side already open this round")
+                vprint("No trade | opposite side already open this round")
                 time.sleep(LOOP_SECONDS)
                 continue
 
             if open_same_side_count(market.slug, side) >= MAX_SAME_SIDE_OPEN_PER_ROUND:
-                print(f"No trade | same-side open cap {MAX_SAME_SIDE_OPEN_PER_ROUND}")
+                vprint(f"No trade | same-side open cap {MAX_SAME_SIDE_OPEN_PER_ROUND}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
             allow_entry, block_reason = can_add_same_side_entry(market.slug, side, float(entry))
             if not allow_entry:
-                print(f"No trade | {block_reason}")
+                vprint(f"No trade | {block_reason}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -1049,7 +1059,8 @@ def main():
                 f"source={entry_source} bal={balance_now:.2f} risk={risk:.2f} mult={risk_mult:.2f}"
             )
             log_trade(market.slug, market.market_id, side, entry, size, edge, note, trade_token_id, entry_source)
-            print(f"TRADE {side} | entry={entry:.4f} | size={size:.2f} | {note}")
+            side_txt = "UP" if side == "BUY_YES" else "DOWN"
+            print(f"BUY {side_txt} | entry={entry:.4f} | size={size:.2f}")
 
             time.sleep(LOOP_SECONDS)
         except KeyboardInterrupt:
@@ -1062,4 +1073,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
