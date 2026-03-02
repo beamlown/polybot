@@ -66,8 +66,14 @@ def _rsi(values: list[float], period: int = 14) -> float:
 
 def signal_up_prob(asset: str = "BTC") -> Tuple[Optional[float], Optional[str], Optional[str]]:
     asset_u = str(asset or "BTC").upper()
-    symbol = "SOLUSDT" if asset_u.startswith("SOL") else "BTCUSDT"
-    product = "SOL-USD" if asset_u.startswith("SOL") else "BTC-USD"
+    if asset_u.startswith("SOL"):
+        symbol, product = "SOLUSDT", "SOL-USD"
+    elif asset_u.startswith("ETH"):
+        symbol, product = "ETHUSDT", "ETH-USD"
+    elif asset_u.startswith("XRP"):
+        symbol, product = "XRPUSDT", "XRP-USD"
+    else:
+        symbol, product = "BTCUSDT", "BTC-USD"
     try:
         c1 = _series("1m", 60, symbol, product)
         c5 = _series("5m", 100, symbol, product)
