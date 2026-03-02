@@ -1,6 +1,7 @@
 ﻿import json
 import os
 import random
+import re
 import sqlite3
 import sys
 import time
@@ -591,14 +592,14 @@ def parse_regime_votes(signal_text: str) -> tuple[str | None, int | None]:
     regime = None
     votes = None
     try:
-        parts = [p.strip() for p in str(signal_text).split("|")]
-        for p in parts:
-            pl = p.lower()
-            if pl.startswith("regime="):
-                regime = p.split("=", 1)[1].strip().upper()
-            elif pl.startswith("votes="):
-                raw = p.split("=", 1)[1].strip().split("/", 1)[0]
-                votes = int(raw)
+        txt = str(signal_text or "")
+        m_reg = re.search(r"regime\s*=\s*([A-Za-z_]+)", txt, flags=re.IGNORECASE)
+        if m_reg:
+            regime = m_reg.group(1).strip().upper()
+
+        m_votes = re.search(r"votes\s*=\s*(\d+)", txt, flags=re.IGNORECASE)
+        if m_votes:
+            votes = int(m_votes.group(1))
     except Exception:
         return regime, votes
     return regime, votes
