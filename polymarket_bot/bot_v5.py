@@ -70,6 +70,7 @@ ENTRY_WINDOW_START_SECONDS = int(os.getenv("ENTRY_WINDOW_START_SECONDS", "0"))
 ENTRY_WINDOW_END_SECONDS = int(os.getenv("ENTRY_WINDOW_END_SECONDS", "999999"))
 DB = "trades_v4.db"
 BUILD_TAG = "v5.2026-03-01.001"
+ENGINE_TAG = "v5_liquidity_softbook"
 
 
 def die(code: int, msg: str):
@@ -704,8 +705,9 @@ def main():
     bankroll = STARTING_BANKROLL
 
     print("=" * 72)
-    print(f"POLYMARKET BOT V4 (clean + debuggable) | {BUILD_TAG}")
+    print(f"POLYMARKET BOT V5 | {BUILD_TAG}")
     print("=" * 72)
+    print(f"BOOT | engine={ENGINE_TAG} | build={BUILD_TAG} | file={os.path.abspath(__file__)}")
     print(
         f"CONFIG | edge={MIN_EDGE:.3f} prob_delta={MIN_PROB_DISTANCE:.3f} side_adv={MIN_SIDE_ADVANTAGE:.3f} "
         f"sl={AUTO_STOP_LOSS_PCT:.2f} tp={AUTO_TAKE_PROFIT_PCT:.2f} partial={PARTIAL_TP_TRIGGER_PCT:.2f}/{PARTIAL_TP_SELL_FRACTION:.2f} "
@@ -776,7 +778,7 @@ def main():
                 weak_top = (top_bid_usd >= MIN_TOP_BOOK_USD and top_ask_usd >= MIN_TOP_BOOK_USD)
                 strong_top = (top_bid_usd >= TOP_BOOK_STRONG_USD and top_ask_usd >= TOP_BOOK_STRONG_USD)
                 vprint(
-                    f"CANDIDATE | prefix={pref} slug={market.slug} suffix={market.suffix} market_id={market.market_id} "
+                    f"CANDIDATE | engine={ENGINE_TAG} build={BUILD_TAG} | prefix={pref} slug={market.slug} suffix={market.suffix} market_id={market.market_id} "
                     f"bid={yes_bid} ask={yes_ask} spread={spread} depth={depth:.1f} top_bid_usd={top_bid_usd:.1f} top_ask_usd={top_ask_usd:.1f} "
                     f"top_bonus={'strong' if strong_top else ('weak' if weak_top else 'none')} vol24h={market.volume24h} gate={gate_ok} reason={fail_reason or 'ok'}"
                 )
