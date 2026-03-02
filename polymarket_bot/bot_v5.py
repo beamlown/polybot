@@ -109,7 +109,8 @@ def simulate_exit_fill(trigger_bid: float, spread: float | None = None, top_book
     else:
         delay_ms = random.randint(800, 2000)
         retries = random.randint(0, 2)
-    fill_price = max(0.0, trigger_bid - tick * (1 + retries))
+    # Paper realism guard: allow at most 1 tick adverse slip from trigger; retries add delay, not runaway price decay.
+    fill_price = max(0.0, trigger_bid - tick)
     slippage_ticks = (fill_price - trigger_bid) / tick if tick > 0 else 0.0
     return fill_price, delay_ms, retries, slippage_ticks
 
