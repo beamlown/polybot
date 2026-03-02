@@ -84,14 +84,10 @@ def render(d: dict, feed: deque[str]):
     r25 = rr.get("r25", {})
     r50 = rr.get("r50", {})
     r100 = rr.get("r100", {})
-    out.append(
-        crop(
-            f"ROLLING | 25: W/L={r25.get('wins',0)}/{r25.get('losses',0)} WR={float(r25.get('wr',0) or 0):.1f}% PNL={c(float(r25.get('pnl',0) or 0))} "
-            f"| 50: W/L={r50.get('wins',0)}/{r50.get('losses',0)} WR={float(r50.get('wr',0) or 0):.1f}% PNL={c(float(r50.get('pnl',0) or 0))} "
-            f"| 100: W/L={r100.get('wins',0)}/{r100.get('losses',0)} WR={float(r100.get('wr',0) or 0):.1f}% PNL={c(float(r100.get('pnl',0) or 0))}",
-            width,
-        )
-    )
+    out.append("ROLLING")
+    out.append(crop(f"  Last 25  | W/L={r25.get('wins',0)}/{r25.get('losses',0)} | WR={float(r25.get('wr',0) or 0):.1f}% | PNL={c(float(r25.get('pnl',0) or 0))}", width))
+    out.append(crop(f"  Last 50  | W/L={r50.get('wins',0)}/{r50.get('losses',0)} | WR={float(r50.get('wr',0) or 0):.1f}% | PNL={c(float(r50.get('pnl',0) or 0))}", width))
+    out.append(crop(f"  Last 100 | W/L={r100.get('wins',0)}/{r100.get('losses',0)} | WR={float(r100.get('wr',0) or 0):.1f}% | PNL={c(float(r100.get('pnl',0) or 0))}", width))
     out.append(line(width))
     out.append("LIVE FEED")
     for msg in list(feed)[-FEED_LINES:]:
