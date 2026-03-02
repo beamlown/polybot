@@ -167,7 +167,7 @@ def quote_mark_for_open(slug: str, side: str, ob: OBReader | None = None) -> flo
     return None
 
 
-def unrealized_pnl_estimate() -> float:
+def unrealized_pnl_estimate(ob: OBReader | None = None) -> float:
     try:
         conn = sqlite3.connect(DB)
         c = conn.cursor()
@@ -187,7 +187,7 @@ def unrealized_pnl_estimate() -> float:
             by_slug.setdefault(str(slug), []).append((str(side), float(entry), float(rem)))
 
         total = 0.0
-        ob = OBReader()
+        ob = ob or OBReader()
         for slug, legs in by_slug.items():
             for side, entry, rem in legs:
                 mark = quote_mark_for_open(slug, side, ob)
@@ -199,7 +199,7 @@ def unrealized_pnl_estimate() -> float:
         return 0.0
 
 
-def write_state(status_line: str = ""):
+def write_state(status_line: str = "", ob: OBReader | None = None):
     global _last_state_write
     now_mono = time.monotonic()
     if now_mono - _last_state_write < STATE_WRITE_INTERVAL_SEC:
@@ -212,14 +212,14 @@ def write_state(status_line: str = ""):
         total = int(c.execute("SELECT COUNT(*) FROM trades").fetchone()[0] or 0)
         open_n = int(c.execute("SELECT COUNT(*) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0").fetchone()[0] or 0)
         realized = float(c.execute("SELECT COALESCE(SUM(realized_pnl),0) FROM trades WHERE closed_ts IS NOT NULL").fetchone()[0] or 0.0)
-        unrealized = unrealized_pnl_estimate()
+        unrealized = unrealized_pnl_estimate(ob=ob)
         start_bal = STARTING_BANKROLL
         bal = start_bal + realized
         live_bal = start_bal + realized + unrealized
         open_rows = c.execute("SELECT id,slug,side,entry,COALESCE(remaining_size,size) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0 ORDER BY id DESC LIMIT 8").fetchall()
 
         open_with_pnl = []
-        ob_live = OBReader()
+        ob_live = ob or OBReader()
         for rid, rslug, rside, rentry, rrem in open_rows:
             mark = quote_mark_for_open(str(rslug), str(rside), ob_live)
             rpnl = ((float(mark) - float(rentry)) * float(rrem)) if mark is not None else None
@@ -1201,7 +1201,7 @@ def main():
 
     while True:
         try:
-            write_state("loop")
+            write_state("loop", ob=ob)
             cleanup_expired_intents()
             maybe_close_any_expired_open_positions()
             maybe_auto_close_stale_positions()
@@ -1323,7 +1323,15 @@ def main():
                 )
                 last_logged_slug = market.slug
 
-            asset = "SOL" if str(market.slug).startswith("sol-") else "BTC"
+            slug_l = str(market.slug).lower()
+            if slug_l.startswith("sol-"):
+                asset = "SOL"
+            elif slug_l.startswith("eth-"):
+                asset = "ETH"
+            elif slug_l.startswith("xrp-"):
+                asset = "XRP"
+            else:
+                asset = "BTC"
             prob, stext, serr = signal_up_prob(asset=asset)
             if serr:
                 print(serr)
@@ -1610,7 +1618,7 @@ def main():
                 increment_group_scale_count(market.slug, side)
             side_txt = "UP" if side == "BUY_YES" else "DOWN"
             print(f"BUY {side_txt} | entry={entry:.4f} | size={size:.2f}")
-            write_state(f"BUY {side_txt} entry={entry:.4f}")
+            write_state(f"BUY {side_txt} entry={entry:.4f}", ob=ob)
 
             time.sleep(LOOP_SECONDS)
         except KeyboardInterrupt:
