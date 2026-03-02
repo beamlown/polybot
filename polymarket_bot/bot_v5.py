@@ -42,6 +42,7 @@ STOP_LOSS_FINAL_MINUTE_ONLY = os.getenv("STOP_LOSS_FINAL_MINUTE_ONLY", "true").s
 MAX_QUOTE_MISMATCH = float(os.getenv("MAX_QUOTE_MISMATCH", "0.12"))
 STOPLOSS_REENTRY_COOLDOWN_SECONDS = int(os.getenv("STOPLOSS_REENTRY_COOLDOWN_SECONDS", "45"))
 STOP_LOSS_ARMING_DELAY_SECONDS = int(os.getenv("STOP_LOSS_ARMING_DELAY_SECONDS", "15"))
+STOP_LOSS_ARMING_DELAY_SECONDS_SL = int(os.getenv("STOP_LOSS_ARMING_DELAY_SECONDS_SL", "3"))
 MAX_HOLD_SECONDS = int(os.getenv("MAX_HOLD_SECONDS", "300"))
 SAME_SIDE_ENTRY_COOLDOWN_SECONDS = int(os.getenv("SAME_SIDE_ENTRY_COOLDOWN_SECONDS", "20"))
 MIN_REENTRY_PRICE_IMPROVEMENT = float(os.getenv("MIN_REENTRY_PRICE_IMPROVEMENT", "0.01"))
@@ -804,7 +805,7 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
             opened = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
             if opened.tzinfo is None:
                 opened = opened.replace(tzinfo=UTC)
-            if (now_utc - opened).total_seconds() < STOP_LOSS_ARMING_DELAY_SECONDS:
+            if (now_utc - opened).total_seconds() < STOP_LOSS_ARMING_DELAY_SECONDS_SL:
                 continue
         except Exception:
             continue
@@ -852,6 +853,9 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
         trigger = float(close_price)
         effective_stop_px = _effective_stop_px(entry, int(ptd), float(peak or entry))
         effective_stop_pct = 1.0 - (effective_stop_px / max(entry, 1e-9))
+        breach = max(0.0, effective_stop_px - trigger)
+        breach_ticks = breach / 0.01
+        late_exit = breach_ticks >= 2.0
         fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=30.0)
         pnl = (fill - entry) * size
         c.execute(
@@ -860,7 +864,7 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
         )
         closed += 1
         side_txt = "UP" if side == "BUY_YES" else "DOWN"
-        print(f"EXIT_TRIGGER | id={tid} token={side_txt} mark_bid={trigger:.4f} tp_hit=False sl_hit=True quote_age=0.0s")
+        print(f"EXIT_TRIGGER | id={tid} token={side_txt} mark_bid={trigger:.4f} stop_px={effective_stop_px:.4f} breach={breach:.4f} breach_t={breach_ticks:.1f} late_exit={str(late_exit).lower()} tp_hit=False sl_hit=True quote_age=0.0s")
         print(f"EXIT_ORDER | id={tid} type=SELL limit={max(0.0, trigger-0.01):.4f} attempt=1")
         print(f"EXIT_FILLED | id={tid} fill={fill:.4f} slippage={slip_ticks:+.1f}t ttf={delay_ms}ms retries={retries}")
         print(f"STOP_CLOSE | id={tid} entry={entry:.4f} sell={fill:.4f} raw_sl={AUTO_STOP_LOSS_PCT:.2f} cap={MAX_STOP_PCT:.2f} effective={effective_stop_pct:.2f} stop_px={effective_stop_px:.4f}")
@@ -1120,7 +1124,7 @@ def main():
         f"CONFIG | edge={MIN_EDGE:.3f} prob_delta={MIN_PROB_DISTANCE:.3f} side_adv={MIN_SIDE_ADVANTAGE:.3f} "
         f"sl={AUTO_STOP_LOSS_PCT:.2f} max_sl={MAX_STOP_PCT:.2f} tp={AUTO_TAKE_PROFIT_PCT:.2f} partial={PARTIAL_TP_TRIGGER_PCT:.2f}/{PARTIAL_TP_SELL_FRACTION:.2f} trail={TRAILING_STOP_AFTER_PARTIAL_PCT:.2f} tstop={TIME_STOP_SECONDS}s/{TIME_STOP_MAX_PNL_PCT:.2f} "
         f"entries_round={MAX_ENTRIES_PER_ROUND} same_side_open_cap={MAX_SAME_SIDE_OPEN_PER_ROUND} prefixes={','.join(SERIES_PREFIXES)} max_conc={MAX_CONCURRENT_TRADES} "
-        f"window={ENTRY_WINDOW_START_SECONDS}-{ENTRY_WINDOW_END_SECONDS}s loop={LOOP_SECONDS}s stop_cooldown={STOPLOSS_REENTRY_COOLDOWN_SECONDS}s"
+        f"window={ENTRY_WINDOW_START_SECONDS}-{ENTRY_WINDOW_END_SECONDS}s loop={LOOP_SECONDS}s stop_cooldown={STOPLOSS_REENTRY_COOLDOWN_SECONDS}s sl_arm={STOP_LOSS_ARMING_DELAY_SECONDS_SL}s"
     )
 
     current_force_slug = FORCE_SLUG
