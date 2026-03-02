@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from collections import deque
 from pathlib import Path
@@ -93,12 +94,11 @@ def render(d: dict, feed: deque[str]):
     while len(out) < need:
         out.append("")
 
-    print("\033[H", end="")
+    os.system("cls" if os.name == "nt" else "clear")
     print("\n".join(out))
 
 
 def main():
-    print("\033[2J\033[H", end="")
     feed = deque(maxlen=120)
     seen_close_ids = set()
     last_open_sig = None
