@@ -1,4 +1,6 @@
-﻿import os
+﻿import json
+import os
+import random
 import sqlite3
 import sys
 import time
@@ -69,8 +71,9 @@ MIN_SECONDS_TO_EXPIRY = int(os.getenv("MIN_SECONDS_TO_EXPIRY", "0"))
 ENTRY_WINDOW_START_SECONDS = int(os.getenv("ENTRY_WINDOW_START_SECONDS", "0"))
 ENTRY_WINDOW_END_SECONDS = int(os.getenv("ENTRY_WINDOW_END_SECONDS", "999999"))
 DB = "trades_v4.db"
-BUILD_TAG = "v5.2026-03-01.001"
-ENGINE_TAG = "v5_liquidity_softbook"
+BUILD_TAG = "v5.1.2026-03-02.001"
+ENGINE_TAG = "v5_paper_fill_realism"
+STATE_PATH = os.path.join(os.path.dirname(__file__), "runtime", "state_v5.json")
 
 
 def die(code: int, msg: str):
@@ -81,6 +84,56 @@ def die(code: int, msg: str):
 def vprint(msg: str):
     if not QUIET_LOGGING:
         print(msg)
+
+
+def simulate_exit_fill(trigger_bid: float, spread: float | None = None, top_book_usd: float | None = None, tick: float = 0.01):
+    s = spread if (spread is not None and spread > 0) else 0.01
+    tbu = top_book_usd if (top_book_usd is not None and top_book_usd > 0) else 25.0
+    if tbu >= 50 and s <= 0.01:
+        delay_ms = random.randint(200, 600)
+        retries = 0
+    else:
+        delay_ms = random.randint(800, 2000)
+        retries = random.randint(0, 2)
+    fill_price = max(0.0, trigger_bid - tick * (1 + retries))
+    slippage_ticks = (fill_price - trigger_bid) / tick if tick > 0 else 0.0
+    return fill_price, delay_ms, retries, slippage_ticks
+
+
+def write_state(status_line: str = ""):
+    try:
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        conn = sqlite3.connect(DB)
+        c = conn.cursor()
+        total = int(c.execute("SELECT COUNT(*) FROM trades").fetchone()[0] or 0)
+        open_n = int(c.execute("SELECT COUNT(*) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0").fetchone()[0] or 0)
+        realized = float(c.execute("SELECT COALESCE(SUM(realized_pnl),0) FROM trades WHERE closed_ts IS NOT NULL").fetchone()[0] or 0.0)
+        start_bal = STARTING_BANKROLL
+        bal = start_bal + realized
+        open_rows = c.execute("SELECT id,slug,side,entry,COALESCE(remaining_size,size) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0 ORDER BY id DESC LIMIT 8").fetchall()
+        recent = c.execute("SELECT id,slug,side,COALESCE(close_note,'n/a'),COALESCE(realized_pnl,0) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT 8").fetchall()
+        conn.close()
+        payload = {
+            "engine": ENGINE_TAG,
+            "build": BUILD_TAG,
+            "now": datetime.now(UTC).isoformat(),
+            "balance_est": bal,
+            "start_balance": start_bal,
+            "pnl": {"realized_all": realized, "unrealized": 0.0, "net": realized},
+            "slots": {"open": open_n, "pending": 0, "max": MAX_CONCURRENT_TRADES},
+            "open_positions": [{"id":r[0],"slug":r[1],"side":r[2],"entry":r[3],"remaining_size":r[4]} for r in open_rows],
+            "recent_closed": [{"id":r[0],"slug":r[1],"side":r[2],"reason":r[3],"pnl_usd":r[4]} for r in recent],
+            "total_trades": total,
+            "status_line": status_line,
+        }
+        tmp = STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, STATE_PATH)
+    except Exception:
+        pass
 
 
 def init_db():
@@ -121,6 +174,16 @@ def init_db():
             c.execute("UPDATE trades SET remaining_size = size WHERE remaining_size IS NULL")
         if "partial_tp_done" not in cols:
             c.execute("ALTER TABLE trades ADD COLUMN partial_tp_done INTEGER DEFAULT 0")
+        if "exit_trigger_price" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN exit_trigger_price REAL")
+        if "exit_fill_price" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN exit_fill_price REAL")
+        if "slippage_ticks" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN slippage_ticks REAL")
+        if "fill_delay_ms" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN fill_delay_ms INTEGER")
+        if "fill_retries" not in cols:
+            c.execute("ALTER TABLE trades ADD COLUMN fill_retries INTEGER")
 
         conn.commit()
         conn.close()
@@ -271,14 +334,18 @@ def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: flo
         tp_target = entry * (1.0 + AUTO_TAKE_PROFIT_PCT)
         abs_target_hit = (AUTO_TAKE_PROFIT_ABS > 0 and close_price >= AUTO_TAKE_PROFIT_ABS)
         if rem > 0 and (close_price >= tp_target or abs_target_hit):
-            pnl = (float(close_price) - entry) * rem
+            trigger = float(close_price)
+            fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=50.0)
+            pnl = (fill - entry) * rem
             c.execute(
-                "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
-                (now_iso, float(close_price), "auto_take_profit", float(pnl), int(tid)),
+                "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0, exit_trigger_price = ?, exit_fill_price = ?, slippage_ticks = ?, fill_delay_ms = ?, fill_retries = ? WHERE id = ?",
+                (now_iso, float(fill), "auto_take_profit", float(pnl), trigger, float(fill), float(slip_ticks), int(delay_ms), int(retries), int(tid)),
             )
             closed += 1
-            net = realized_net_pnl() + pnl
             side_txt = "UP" if side == "BUY_YES" else "DOWN"
+            print(f"EXIT_TRIGGER | id={tid} token={side_txt} mark_bid={trigger:.4f} tp_hit=True sl_hit=False quote_age=0.0s")
+            print(f"EXIT_ORDER | id={tid} type=SELL limit={max(0.0, trigger-0.01):.4f} attempt=1")
+            print(f"EXIT_FILLED | id={tid} fill={fill:.4f} slippage={slip_ticks:+.1f}t ttf={delay_ms}ms retries={retries}")
             print(f"SELL TP | {side_txt} | id={tid} | pnl={pnl:+.2f}")
 
     conn.commit()
@@ -549,14 +616,18 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
         if close_price is None:
             continue
 
-        pnl = (float(close_price) - entry) * size
+        trigger = float(close_price)
+        fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=30.0)
+        pnl = (fill - entry) * size
         c.execute(
-            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
-            (now_iso, float(close_price), "auto_stop_loss", float(pnl), int(tid)),
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0, exit_trigger_price = ?, exit_fill_price = ?, slippage_ticks = ?, fill_delay_ms = ?, fill_retries = ? WHERE id = ?",
+            (now_iso, float(fill), "auto_stop_loss", float(pnl), trigger, float(fill), float(slip_ticks), int(delay_ms), int(retries), int(tid)),
         )
         closed += 1
-        net = realized_net_pnl() + pnl
         side_txt = "UP" if side == "BUY_YES" else "DOWN"
+        print(f"EXIT_TRIGGER | id={tid} token={side_txt} mark_bid={trigger:.4f} tp_hit=False sl_hit=True quote_age=0.0s")
+        print(f"EXIT_ORDER | id={tid} type=SELL limit={max(0.0, trigger-0.01):.4f} attempt=1")
+        print(f"EXIT_FILLED | id={tid} fill={fill:.4f} slippage={slip_ticks:+.1f}t ttf={delay_ms}ms retries={retries}")
         print(f"SELL SL | {side_txt} | id={tid} | pnl={pnl:+.2f}")
 
     conn.commit()
@@ -588,14 +659,18 @@ def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_
         close_price = sell_yes_px if side == "BUY_YES" else sell_no_px
         if close_price is None:
             continue
-        pnl = (float(close_price) - entry) * size
+        trigger = float(close_price)
+        fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=40.0)
+        pnl = (fill - entry) * size
         c.execute(
-            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
-            (now_iso, float(close_price), "round_expired_auto_close", float(pnl), int(tid)),
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0, exit_trigger_price = ?, exit_fill_price = ?, slippage_ticks = ?, fill_delay_ms = ?, fill_retries = ? WHERE id = ?",
+            (now_iso, float(fill), "round_expired_auto_close", float(pnl), trigger, float(fill), float(slip_ticks), int(delay_ms), int(retries), int(tid)),
         )
         closed += 1
-        net = realized_net_pnl() + pnl
         side_txt = "UP" if side == "BUY_YES" else "DOWN"
+        print(f"EXIT_TRIGGER | id={tid} token={side_txt} mark_bid={trigger:.4f} tp_hit=False sl_hit=False quote_age=0.0s")
+        print(f"EXIT_ORDER | id={tid} type=SELL limit={max(0.0, trigger-0.01):.4f} attempt=1")
+        print(f"EXIT_FILLED | id={tid} fill={fill:.4f} slippage={slip_ticks:+.1f}t ttf={delay_ms}ms retries={retries}")
         print(f"SELL EXPIRY | {side_txt} | id={tid} | pnl={pnl:+.2f}")
 
     conn.commit()
@@ -633,14 +708,17 @@ def maybe_close_any_expired_open_positions() -> int:
             continue
 
         close_price = yes_px if side == "BUY_YES" else (1.0 - yes_px)
-        pnl = (float(close_price) - float(entry)) * float(size)
+        trigger = float(close_price)
+        fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=25.0)
+        pnl = (fill - float(entry)) * float(size)
         c.execute(
-            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
-            (datetime.now(UTC).isoformat(), float(close_price), "expired_sweep_auto_close", float(pnl), int(tid)),
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0, exit_trigger_price = ?, exit_fill_price = ?, slippage_ticks = ?, fill_delay_ms = ?, fill_retries = ? WHERE id = ?",
+            (datetime.now(UTC).isoformat(), float(fill), "expired_sweep_auto_close", float(pnl), trigger, float(fill), float(slip_ticks), int(delay_ms), int(retries), int(tid)),
         )
         closed += 1
-        net = realized_net_pnl() + pnl
-        print(f"ALERT EXPIRED_SWEEP_CLOSE | id={tid} slug={slug} side={side} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
+        print(f"EXIT_TRIGGER | id={tid} token={side} mark_bid={trigger:.4f} tp_hit=False sl_hit=False quote_age=0.0s")
+        print(f"EXIT_ORDER | id={tid} type=SELL limit={max(0.0, trigger-0.01):.4f} attempt=1")
+        print(f"EXIT_FILLED | id={tid} fill={fill:.4f} slippage={slip_ticks:+.1f}t ttf={delay_ms}ms retries={retries}")
 
     conn.commit()
     conn.close()
@@ -682,14 +760,17 @@ def maybe_auto_close_stale_positions() -> int:
             continue
 
         close_price = yes_px if side == "BUY_YES" else (1.0 - yes_px)
-        pnl = (float(close_price) - float(entry)) * float(size)
+        trigger = float(close_price)
+        fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=25.0)
+        pnl = (fill - float(entry)) * float(size)
         c.execute(
-            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0 WHERE id = ?",
-            (now.isoformat(), float(close_price), "max_hold_auto_close", float(pnl), int(tid)),
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0, exit_trigger_price = ?, exit_fill_price = ?, slippage_ticks = ?, fill_delay_ms = ?, fill_retries = ? WHERE id = ?",
+            (now.isoformat(), float(fill), "max_hold_auto_close", float(pnl), trigger, float(fill), float(slip_ticks), int(delay_ms), int(retries), int(tid)),
         )
         closed += 1
-        net = realized_net_pnl() + pnl
-        print(f"ALERT MAX_HOLD_TIMEOUT | id={tid} age={int(age)}s side={side} entry={float(entry):.4f} close={float(close_price):.4f} pnl={pnl:+.2f} net_realized~={net:+.2f}")
+        print(f"EXIT_TRIGGER | id={tid} token={side} mark_bid={trigger:.4f} tp_hit=False sl_hit=False quote_age=0.0s")
+        print(f"EXIT_ORDER | id={tid} type=SELL limit={max(0.0, trigger-0.01):.4f} attempt=1")
+        print(f"EXIT_FILLED | id={tid} fill={fill:.4f} slippage={slip_ticks:+.1f}t ttf={delay_ms}ms retries={retries}")
 
     conn.commit()
     conn.close()
@@ -720,6 +801,7 @@ def main():
 
     while True:
         try:
+            write_state("loop")
             maybe_close_any_expired_open_positions()
             maybe_auto_close_stale_positions()
 
@@ -847,10 +929,17 @@ def main():
             yes_best_bid = book.best_bid if (berr is None and book is not None) else market.best_bid
             yes_best_ask = book.best_ask if (berr is None and book is not None) else market.best_ask
 
+            no_book, no_berr = ob.read(market.no_token_id) if market.no_token_id else (None, "missing_no_token")
+            no_best_bid = no_book.best_bid if (no_berr is None and no_book is not None) else None
+            no_best_ask = no_book.best_ask if (no_berr is None and no_book is not None) else None
+
             buy_yes_px = yes_best_ask if yes_best_ask is not None else market.yes_price
-            buy_no_px = (1.0 - yes_best_bid) if yes_best_bid is not None else market.no_price
+            buy_no_px = no_best_ask if no_best_ask is not None else ((1.0 - yes_best_bid) if yes_best_bid is not None else market.no_price)
             sell_yes_px = yes_best_bid if yes_best_bid is not None else market.yes_price
-            sell_no_px = (1.0 - yes_best_ask) if yes_best_ask is not None else market.no_price
+            sell_no_px = no_best_bid if no_best_bid is not None else ((1.0 - yes_best_ask) if yes_best_ask is not None else market.no_price)
+
+            if no_best_bid is None or no_best_ask is None:
+                vprint(f"MARK_FALLBACK | reason=no_quote_for_NO | slug={market.slug}")
 
             # Use realtime book as primary anchor (Gamma can lag on 5m rounds).
             realtime_yes = None
@@ -1063,6 +1152,7 @@ def main():
             log_trade(market.slug, market.market_id, side, entry, size, edge, note, trade_token_id, entry_source)
             side_txt = "UP" if side == "BUY_YES" else "DOWN"
             print(f"BUY {side_txt} | entry={entry:.4f} | size={size:.2f}")
+            write_state(f"BUY {side_txt} entry={entry:.4f}")
 
             time.sleep(LOOP_SECONDS)
         except KeyboardInterrupt:
@@ -1070,6 +1160,7 @@ def main():
             break
         except Exception as e:
             print(f"[ERR 1999] loop_error: {e}")
+            write_state(f"loop_error: {e}")
             time.sleep(LOOP_SECONDS)
 
 
