@@ -54,9 +54,13 @@ def main():
             print("(none)")
         else:
             for r in opens:
+                pnl = r.get('pnl_usd', None)
+                pnl_txt = color_pnl(float(pnl)) if pnl is not None else "n/a"
+                mark = r.get('mark', None)
+                mark_txt = f"{float(mark):.4f}" if mark is not None else "n/a"
                 print(
                     f"id={r.get('id')} | {r.get('slug')} | {r.get('side')} | "
-                    f"entry={r.get('entry')} | rem={r.get('remaining_size')}"
+                    f"entry={r.get('entry')} | mark={mark_txt} | rem={r.get('remaining_size')} | pnl={pnl_txt}"
                 )
 
         print("-" * 90)
