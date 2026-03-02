@@ -106,6 +106,13 @@ def vprint(msg: str):
         print(msg)
 
 
+def parse_ts(raw: str) -> datetime:
+    """Safely parse ISO timestamp, always returning a UTC-aware datetime."""
+    s = str(raw).strip().replace("Z", "+00:00")
+    dt = datetime.fromisoformat(s)
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
 def simulate_exit_fill(trigger_bid: float, spread: float | None = None, top_book_usd: float | None = None, tick: float = 0.01):
     s = spread if (spread is not None and spread > 0) else 0.01
     tbu = top_book_usd if (top_book_usd is not None and top_book_usd > 0) else 25.0
@@ -585,9 +592,7 @@ def has_recent_stoploss(slug: str) -> bool:
     if not row or not row[0]:
         return False
     try:
-        ts = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
+        ts = parse_ts(row[0])
         age = (datetime.now(UTC) - ts).total_seconds()
         return age < STOPLOSS_REENTRY_COOLDOWN_SECONDS
     except Exception:
@@ -766,9 +771,7 @@ def can_add_same_side_entry(slug: str, side: str, candidate_entry: float) -> tup
 
     # Prevent rapid duplicate spam entries.
     try:
-        last_ts = datetime.fromisoformat(str(last_ts_raw).replace("Z", "+00:00"))
-        if last_ts.tzinfo is None:
-            last_ts = last_ts.replace(tzinfo=UTC)
+        last_ts = parse_ts(last_ts_raw)
         age = (datetime.now(UTC) - last_ts).total_seconds()
         if age < SAME_SIDE_ENTRY_COOLDOWN_SECONDS:
             return False, f"same-side cooldown {int(age)}s/{SAME_SIDE_ENTRY_COOLDOWN_SECONDS}s"
@@ -882,9 +885,7 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
     now_utc = datetime.now(UTC)
     for tid0, ts_raw, side, entry, size0, ptd, peak in rows:
         try:
-            opened = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
-            if opened.tzinfo is None:
-                opened = opened.replace(tzinfo=UTC)
+            opened = parse_ts(ts_raw)
             if (now_utc - opened).total_seconds() < STOP_LOSS_ARMING_DELAY_SECONDS_SL:
                 continue
         except Exception:
@@ -1169,9 +1170,7 @@ def maybe_auto_close_stale_positions() -> int:
     closed = 0
     for tid, ts, slug, side, entry, size in rows:
         try:
-            opened = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-            if opened.tzinfo is None:
-                opened = opened.replace(tzinfo=UTC)
+            opened = parse_ts(ts)
         except Exception:
             continue
 
