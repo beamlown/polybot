@@ -34,6 +34,7 @@ GROUP_TAKE_PROFIT_PCT = float(os.getenv("GROUP_TAKE_PROFIT_PCT", "0.30"))
 BREAKEVEN_AFTER_PARTIAL = os.getenv("BREAKEVEN_AFTER_PARTIAL", "true").strip().lower() in ("1", "true", "yes", "on")
 BREAKEVEN_BUFFER_PCT = float(os.getenv("BREAKEVEN_BUFFER_PCT", "0.01"))
 AUTO_STOP_LOSS_PCT = float(os.getenv("AUTO_STOP_LOSS_PCT", "0"))
+MAX_STOP_PCT = float(os.getenv("MAX_STOP_PCT", "0.30"))
 TRAILING_STOP_AFTER_PARTIAL_PCT = float(os.getenv("TRAILING_STOP_AFTER_PARTIAL_PCT", "0.08"))
 TIME_STOP_SECONDS = int(os.getenv("TIME_STOP_SECONDS", "120"))
 TIME_STOP_MAX_PNL_PCT = float(os.getenv("TIME_STOP_MAX_PNL_PCT", "0.02"))
@@ -760,6 +761,17 @@ def maybe_auto_group_take_profit(slug: str, sell_yes_px: float | None, sell_no_p
     return closed
 
 
+def _effective_stop_px(entry: float, ptd: int, peak_now: float | None = None) -> float:
+    raw_floor = entry * (1.0 - AUTO_STOP_LOSS_PCT)
+    cap_floor = entry * (1.0 - MAX_STOP_PCT)
+    floor = max(raw_floor, cap_floor)
+    if BREAKEVEN_AFTER_PARTIAL and int(ptd) == 1:
+        floor = max(floor, entry * (1.0 + BREAKEVEN_BUFFER_PCT))
+        if TRAILING_STOP_AFTER_PARTIAL_PCT > 0 and peak_now is not None:
+            floor = max(floor, float(peak_now) * (1.0 - TRAILING_STOP_AFTER_PARTIAL_PCT))
+    return floor
+
+
 def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None, quote_ts: datetime | None = None) -> int:
     if AUTO_STOP_LOSS_PCT <= 0:
         return 0
@@ -805,11 +817,7 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
         peak_now = max(float(peak or entry), float(mark))
         c.execute("UPDATE trades SET peak_price=? WHERE id=?", (peak_now, int(tid0)))
 
-        floor = entry * (1.0 - AUTO_STOP_LOSS_PCT)
-        if BREAKEVEN_AFTER_PARTIAL and int(ptd) == 1:
-            floor = max(floor, entry * (1.0 + BREAKEVEN_BUFFER_PCT))
-            if TRAILING_STOP_AFTER_PARTIAL_PCT > 0:
-                floor = max(floor, peak_now * (1.0 - TRAILING_STOP_AFTER_PARTIAL_PCT))
+        floor = _effective_stop_px(entry, int(ptd), peak_now)
 
         # time stop: after holding long enough, close if not making enough progress
         age_s = (now_utc - opened).total_seconds()
@@ -841,6 +849,8 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
             continue
 
         trigger = float(close_price)
+        effective_stop_px = _effective_stop_px(entry, int(ptd), float(peak or entry))
+        effective_stop_pct = 1.0 - (effective_stop_px / max(entry, 1e-9))
         fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=30.0)
         pnl = (fill - entry) * size
         c.execute(
@@ -852,6 +862,7 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
         print(f"EXIT_TRIGGER | id={tid} token={side_txt} mark_bid={trigger:.4f} tp_hit=False sl_hit=True quote_age=0.0s")
         print(f"EXIT_ORDER | id={tid} type=SELL limit={max(0.0, trigger-0.01):.4f} attempt=1")
         print(f"EXIT_FILLED | id={tid} fill={fill:.4f} slippage={slip_ticks:+.1f}t ttf={delay_ms}ms retries={retries}")
+        print(f"STOP_CLOSE | id={tid} entry={entry:.4f} sell={fill:.4f} raw_sl={AUTO_STOP_LOSS_PCT:.2f} cap={MAX_STOP_PCT:.2f} effective={effective_stop_pct:.2f} stop_px={effective_stop_px:.4f}")
         print(f"SELL SL | {side_txt} | id={tid} | pnl={pnl:+.2f}")
 
     conn.commit()
@@ -1106,7 +1117,7 @@ def main():
     print(f"BOOT | engine={ENGINE_TAG} | build={BUILD_TAG} | file={os.path.abspath(__file__)}")
     print(
         f"CONFIG | edge={MIN_EDGE:.3f} prob_delta={MIN_PROB_DISTANCE:.3f} side_adv={MIN_SIDE_ADVANTAGE:.3f} "
-        f"sl={AUTO_STOP_LOSS_PCT:.2f} tp={AUTO_TAKE_PROFIT_PCT:.2f} partial={PARTIAL_TP_TRIGGER_PCT:.2f}/{PARTIAL_TP_SELL_FRACTION:.2f} trail={TRAILING_STOP_AFTER_PARTIAL_PCT:.2f} tstop={TIME_STOP_SECONDS}s/{TIME_STOP_MAX_PNL_PCT:.2f} "
+        f"sl={AUTO_STOP_LOSS_PCT:.2f} max_sl={MAX_STOP_PCT:.2f} tp={AUTO_TAKE_PROFIT_PCT:.2f} partial={PARTIAL_TP_TRIGGER_PCT:.2f}/{PARTIAL_TP_SELL_FRACTION:.2f} trail={TRAILING_STOP_AFTER_PARTIAL_PCT:.2f} tstop={TIME_STOP_SECONDS}s/{TIME_STOP_MAX_PNL_PCT:.2f} "
         f"entries_round={MAX_ENTRIES_PER_ROUND} same_side_open_cap={MAX_SAME_SIDE_OPEN_PER_ROUND} prefixes={','.join(SERIES_PREFIXES)} max_conc={MAX_CONCURRENT_TRADES} "
         f"window={ENTRY_WINDOW_START_SECONDS}-{ENTRY_WINDOW_END_SECONDS}s loop={LOOP_SECONDS}s stop_cooldown={STOPLOSS_REENTRY_COOLDOWN_SECONDS}s"
     )
