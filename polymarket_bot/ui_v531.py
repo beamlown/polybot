@@ -103,6 +103,7 @@ def main():
     seen_close_ids = set()
     last_open_sig = None
     last_now = None
+    last_status = None
 
     while True:
         if not STATE.exists():
@@ -141,11 +142,12 @@ def main():
             feed.append(m)
 
         st = d.get("status_line", "")
-        if st:
+        if st and st != last_status:
             feed.append(f"{DIM}status: {st}{RESET}")
+            last_status = st
 
         render(d, feed)
-        time.sleep(0.35)
+        time.sleep(0.8)
 
 
 if __name__ == "__main__":
