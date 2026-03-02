@@ -70,6 +70,8 @@ QUIET_LOGGING = os.getenv("QUIET_LOGGING", "true").strip().lower() in ("1", "tru
 MIN_SECONDS_TO_EXPIRY = int(os.getenv("MIN_SECONDS_TO_EXPIRY", "0"))
 ENTRY_WINDOW_START_SECONDS = int(os.getenv("ENTRY_WINDOW_START_SECONDS", "0"))
 ENTRY_WINDOW_END_SECONDS = int(os.getenv("ENTRY_WINDOW_END_SECONDS", "999999"))
+MAX_EXIT_QUOTE_AGE_SECONDS = float(os.getenv("MAX_EXIT_QUOTE_AGE_SECONDS", "2.0"))
+FORCE_FLAT_BEFORE_EXPIRY_SECONDS = int(os.getenv("FORCE_FLAT_BEFORE_EXPIRY_SECONDS", "10"))
 DB = "trades_v4.db"
 BUILD_TAG = "v5.1.2026-03-02.001"
 ENGINE_TAG = "v5_paper_fill_realism"
@@ -98,6 +100,16 @@ def simulate_exit_fill(trigger_bid: float, spread: float | None = None, top_book
     fill_price = max(0.0, trigger_bid - tick * (1 + retries))
     slippage_ticks = (fill_price - trigger_bid) / tick if tick > 0 else 0.0
     return fill_price, delay_ms, retries, slippage_ticks
+
+
+def is_stale_quote(quote_ts: datetime | None) -> bool:
+    if quote_ts is None:
+        return False
+    try:
+        age = (datetime.now(UTC) - quote_ts).total_seconds()
+        return age > MAX_EXIT_QUOTE_AGE_SECONDS
+    except Exception:
+        return False
 
 
 def write_state(status_line: str = ""):
@@ -289,8 +301,11 @@ def current_balance_realized_only() -> float:
     return max(0.0, STARTING_BANKROLL + realized_net_pnl())
 
 
-def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: float | None) -> int:
+def maybe_auto_take_profit(slug: str, sell_yes_px: float | None, sell_no_px: float | None, quote_ts: datetime | None = None) -> int:
     if AUTO_TAKE_PROFIT_PCT <= 0:
+        return 0
+    if is_stale_quote(quote_ts):
+        print(f"STALE_QUOTE_SKIP | action=take_profit | slug={slug}")
         return 0
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -560,8 +575,11 @@ def maybe_auto_group_take_profit(slug: str, sell_yes_px: float | None, sell_no_p
     return closed
 
 
-def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None) -> int:
+def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None, quote_ts: datetime | None = None) -> int:
     if AUTO_STOP_LOSS_PCT <= 0:
+        return 0
+    if is_stale_quote(quote_ts):
+        print(f"STALE_QUOTE_SKIP | action=stop_loss | slug={slug}")
         return 0
     # Apply stop logic only in final minute of the round (user preference).
     if eta_seconds is None or eta_seconds > 60:
@@ -635,8 +653,56 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
     return closed
 
 
-def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None) -> int:
+def maybe_auto_force_flatten_before_expiry(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None, quote_ts: datetime | None = None) -> int:
+    if FORCE_FLAT_BEFORE_EXPIRY_SECONDS <= 0:
+        return 0
+    if eta_seconds is None or eta_seconds > FORCE_FLAT_BEFORE_EXPIRY_SECONDS or eta_seconds <= 0:
+        return 0
+    if is_stale_quote(quote_ts):
+        print(f"STALE_QUOTE_SKIP | action=pre_expiry_flatten | slug={slug}")
+        return 0
+
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    rows = c.execute(
+        """
+        SELECT id, side, entry, COALESCE(remaining_size, size) AS size
+        FROM trades
+        WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0
+        ORDER BY id ASC
+        """,
+        (slug,),
+    ).fetchall()
+
+    closed = 0
+    now_iso = datetime.now(UTC).isoformat()
+    for tid, side, entry, size in rows:
+        entry = float(entry)
+        size = float(size)
+        close_price = sell_yes_px if side == "BUY_YES" else sell_no_px
+        if close_price is None:
+            continue
+        trigger = float(close_price)
+        fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=40.0)
+        pnl = (fill - entry) * size
+        c.execute(
+            "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0, exit_trigger_price = ?, exit_fill_price = ?, slippage_ticks = ?, fill_delay_ms = ?, fill_retries = ? WHERE id = ?",
+            (now_iso, float(fill), "pre_expiry_auto_close", float(pnl), trigger, float(fill), float(slip_ticks), int(delay_ms), int(retries), int(tid)),
+        )
+        closed += 1
+        side_txt = "UP" if side == "BUY_YES" else "DOWN"
+        print(f"SELL PRE_EXPIRY | {side_txt} | id={tid} | eta={eta_seconds}s | pnl={pnl:+.2f}")
+
+    conn.commit()
+    conn.close()
+    return closed
+
+
+def maybe_auto_close_expired_round(slug: str, eta_seconds: int | None, sell_yes_px: float | None, sell_no_px: float | None, quote_ts: datetime | None = None) -> int:
     if eta_seconds is None or eta_seconds > 0:
+        return 0
+    if is_stale_quote(quote_ts):
+        print(f"STALE_QUOTE_SKIP | action=round_expired_close | slug={slug}")
         return 0
 
     conn = sqlite3.connect(DB)
@@ -937,6 +1003,7 @@ def main():
             buy_no_px = no_best_ask if no_best_ask is not None else ((1.0 - yes_best_bid) if yes_best_bid is not None else market.no_price)
             sell_yes_px = yes_best_bid if yes_best_bid is not None else market.yes_price
             sell_no_px = no_best_bid if no_best_bid is not None else ((1.0 - yes_best_ask) if yes_best_ask is not None else market.no_price)
+            quote_ts = datetime.now(UTC)
 
             if no_best_bid is None or no_best_ask is None:
                 vprint(f"MARK_FALLBACK | reason=no_quote_for_NO | slug={market.slug}")
@@ -964,10 +1031,11 @@ def main():
                     continue
 
             eta_now = seconds_to_next(market.slug, market.end_ts)
-            maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px)
+            maybe_auto_force_flatten_before_expiry(market.slug, eta_now, sell_yes_px, sell_no_px, quote_ts)
+            maybe_auto_close_expired_round(market.slug, eta_now, sell_yes_px, sell_no_px, quote_ts)
             maybe_auto_group_take_profit(market.slug, sell_yes_px, sell_no_px)
-            maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px)
-            maybe_auto_stop_loss(market.slug, eta_now, sell_yes_px, sell_no_px)
+            maybe_auto_take_profit(market.slug, sell_yes_px, sell_no_px, quote_ts)
+            maybe_auto_stop_loss(market.slug, eta_now, sell_yes_px, sell_no_px, quote_ts)
 
             # Round timeline window guard
             now_ts = int(datetime.now(UTC).timestamp())
