@@ -123,7 +123,7 @@ def write_state(status_line: str = ""):
         start_bal = STARTING_BANKROLL
         bal = start_bal + realized
         open_rows = c.execute("SELECT id,slug,side,entry,COALESCE(remaining_size,size) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0 ORDER BY id DESC LIMIT 8").fetchall()
-        recent = c.execute("SELECT id,slug,side,COALESCE(close_note,'n/a'),COALESCE(realized_pnl,0) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT 8").fetchall()
+        recent = c.execute("SELECT id,slug,side,COALESCE(close_note,'n/a'),COALESCE(realized_pnl,0) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT 10").fetchall()
         conn.close()
         payload = {
             "engine": ENGINE_TAG,
