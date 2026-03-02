@@ -858,7 +858,14 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
         breach_ticks = breach / 0.01
         late_exit = breach_ticks >= 2.0
         exit_limit = max(0.0, effective_stop_px - 0.01)
-        fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=30.0)
+        if breach_ticks >= 2.0:
+            # Emergency stop breach: use more marketable exit behavior (faster, fewer retries)
+            delay_ms = random.randint(100, 350)
+            retries = 0
+            fill = max(0.0, trigger - 0.02)
+            slip_ticks = (fill - trigger) / 0.01
+        else:
+            fill, delay_ms, retries, slip_ticks = simulate_exit_fill(trigger, spread=0.01, top_book_usd=30.0)
         pnl = (fill - entry) * size
         c.execute(
             "UPDATE trades SET closed_ts = ?, close_price = ?, close_note = ?, realized_pnl = COALESCE(realized_pnl, 0) + ?, remaining_size = 0, exit_trigger_price = ?, exit_fill_price = ?, slippage_ticks = ?, fill_delay_ms = ?, fill_retries = ? WHERE id = ?",
@@ -869,7 +876,8 @@ def maybe_auto_stop_loss(slug: str, eta_seconds: int | None, sell_yes_px: float 
         print(f"EXIT_TRIGGER | id={tid} token={side_txt} mark_at_trigger={trigger:.4f} stop_px={effective_stop_px:.4f} breach={breach:.4f} breach_ticks={breach_ticks:.1f} late_exit={str(late_exit).lower()} tp_hit=False sl_hit=True quote_age=0.0s")
         print(f"EXIT_ORDER | id={tid} type=SELL limit={exit_limit:.4f} attempt=1 pending_timeout={PENDING_ORDER_TIMEOUT_SEC}s")
         print(f"EXIT_FILLED | id={tid} fill={fill:.4f} slippage={slip_ticks:+.1f}t ttf={delay_ms}ms retries={retries}")
-        print(f"STOP_CLOSE | id={tid} entry={entry:.4f} mark_at_trigger={trigger:.4f} sell={fill:.4f} raw_sl={AUTO_STOP_LOSS_PCT:.2f} cap={MAX_STOP_PCT:.2f} effective={effective_stop_pct:.2f} stop_px={effective_stop_px:.4f} breach_ticks={breach_ticks:.1f} late_exit={str(late_exit).lower()}")
+        realized_stop_pct = 1.0 - (float(fill) / max(entry, 1e-9))
+        print(f"STOP_CLOSE | id={tid} entry={entry:.4f} mark_at_trigger={trigger:.4f} sell={fill:.4f} raw_sl={AUTO_STOP_LOSS_PCT:.2f} cap={MAX_STOP_PCT:.2f} effective={effective_stop_pct:.2f} realized_stop={realized_stop_pct:.2f} stop_px={effective_stop_px:.4f} breach_ticks={breach_ticks:.1f} late_exit={str(late_exit).lower()}")
         print(f"SELL SL | {side_txt} | id={tid} | pnl={pnl:+.2f}")
 
     conn.commit()
