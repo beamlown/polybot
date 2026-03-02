@@ -259,11 +259,17 @@ for r in rows:
         if clob_buy_down is not None:
             buy_down_px = clob_buy_down
 
-        clob_exec = get_clob_exec_mark(trade_token_id, clob)
-        # Safety: only trust CLOB token mark when it's reasonably close to Gamma-derived executable view.
-        if clob_exec is not None:
-            if exec_px is None or abs(clob_exec - exec_px) <= 0.15:
-                exec_px = clob_exec
+        # Align mark with the same live quote family shown in Buy UP/Buy DOWN columns.
+        if side == "BUY_YES" and buy_up_px is not None:
+            exec_px = buy_up_px
+        elif side == "BUY_NO" and buy_down_px is not None:
+            exec_px = buy_down_px
+        else:
+            clob_exec = get_clob_exec_mark(trade_token_id, clob)
+            # Safety: only trust CLOB token mark when it's reasonably close to Gamma-derived executable view.
+            if clob_exec is not None:
+                if exec_px is None or abs(clob_exec - exec_px) <= 0.15:
+                    exec_px = clob_exec
         ui_txt = c("n/a", YLW) if ui_px is None else c(format_cents(ui_px), WHT)
         buy_up_txt = c("n/a", YLW) if buy_up_px is None else c(format_cents(buy_up_px), CYN)
         buy_down_txt = c("n/a", YLW) if buy_down_px is None else c(format_cents(buy_down_px), CYN)
