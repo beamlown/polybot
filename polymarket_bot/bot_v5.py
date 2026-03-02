@@ -258,6 +258,8 @@ def write_state(status_line: str = ""):
 def init_db():
     try:
         conn = sqlite3.connect(DB)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         c = conn.cursor()
         c.execute(
             """
