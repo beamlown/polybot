@@ -112,6 +112,45 @@ def is_stale_quote(quote_ts: datetime | None) -> bool:
         return False
 
 
+def unrealized_pnl_estimate() -> float:
+    try:
+        conn = sqlite3.connect(DB)
+        c = conn.cursor()
+        rows = c.execute(
+            """
+            SELECT slug, side, entry, COALESCE(remaining_size,size) AS rem
+            FROM trades
+            WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0
+            """
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return 0.0
+
+        by_slug = {}
+        for slug, side, entry, rem in rows:
+            by_slug.setdefault(str(slug), []).append((str(side), float(entry), float(rem)))
+
+        total = 0.0
+        for slug, legs in by_slug.items():
+            try:
+                i = slug.rfind("-5m-")
+                pref = slug[:i] if i > 0 else SERIES_PREFIX
+            except Exception:
+                pref = SERIES_PREFIX
+            market, derr = discover(pref, ROUND_MINUTES, force_slug=slug)
+            if derr or market is None or market.yes_price is None:
+                continue
+            yes_mark = float(market.yes_price)
+            no_mark = max(0.0, min(1.0, 1.0 - yes_mark))
+            for side, entry, rem in legs:
+                mark = yes_mark if side == "BUY_YES" else no_mark
+                total += (mark - entry) * rem
+        return float(total)
+    except Exception:
+        return 0.0
+
+
 def write_state(status_line: str = ""):
     try:
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
@@ -120,8 +159,10 @@ def write_state(status_line: str = ""):
         total = int(c.execute("SELECT COUNT(*) FROM trades").fetchone()[0] or 0)
         open_n = int(c.execute("SELECT COUNT(*) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0").fetchone()[0] or 0)
         realized = float(c.execute("SELECT COALESCE(SUM(realized_pnl),0) FROM trades WHERE closed_ts IS NOT NULL").fetchone()[0] or 0.0)
+        unrealized = unrealized_pnl_estimate()
         start_bal = STARTING_BANKROLL
         bal = start_bal + realized
+        live_bal = start_bal + realized + unrealized
         open_rows = c.execute("SELECT id,slug,side,entry,COALESCE(remaining_size,size) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0 ORDER BY id DESC LIMIT 8").fetchall()
         recent = c.execute("SELECT id,slug,side,COALESCE(close_note,'n/a'),COALESCE(realized_pnl,0) FROM trades WHERE closed_ts IS NOT NULL ORDER BY id DESC LIMIT 10").fetchall()
         conn.close()
@@ -130,8 +171,9 @@ def write_state(status_line: str = ""):
             "build": BUILD_TAG,
             "now": datetime.now(UTC).isoformat(),
             "balance_est": bal,
+            "live_balance_est": live_bal,
             "start_balance": start_bal,
-            "pnl": {"realized_all": realized, "unrealized": 0.0, "net": realized},
+            "pnl": {"realized_all": realized, "unrealized": unrealized, "net": realized + unrealized},
             "slots": {"open": open_n, "pending": 0, "max": MAX_CONCURRENT_TRADES},
             "open_positions": [{"id":r[0],"slug":r[1],"side":r[2],"entry":r[3],"remaining_size":r[4]} for r in open_rows],
             "recent_closed": [{"id":r[0],"slug":r[1],"side":r[2],"reason":r[3],"pnl_usd":r[4]} for r in recent],

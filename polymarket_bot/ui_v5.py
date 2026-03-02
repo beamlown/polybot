@@ -36,10 +36,14 @@ def main():
             time.sleep(0.2)
             continue
 
-        net = float(d.get("pnl", {}).get("net", 0) or 0)
+        pnl = d.get("pnl", {})
+        net = float(pnl.get("net", 0) or 0)
+        realized = float(pnl.get("realized_all", 0) or 0)
+        unreal = float(pnl.get("unrealized", 0) or 0)
         print(f"ENGINE: {d.get('engine')} | BUILD: {d.get('build')}")
         print(f"NOW: {d.get('now')}")
-        print(f"BALANCE: ${d.get('balance_est',0):,.2f} | NET: {color_pnl(net)}")
+        print(f"BALANCE (REALIZED): ${d.get('balance_est',0):,.2f} | REALIZED PNL: {color_pnl(realized)}")
+        print(f"LIVE PNL EST (incl open): {color_pnl(net)} | OPEN PNL: {color_pnl(unreal)} | LIVE BAL EST: ${d.get('live_balance_est', d.get('balance_est',0)):,.2f}")
         s = d.get("slots", {})
         print(f"SLOTS: open={s.get('open',0)} / max={s.get('max',0)}")
 
