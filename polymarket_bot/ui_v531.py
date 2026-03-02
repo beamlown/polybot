@@ -1,11 +1,13 @@
 import json
 import os
 import shutil
+import sqlite3
 import time
 from collections import deque
 from pathlib import Path
 
 STATE = Path(__file__).parent / "runtime" / "state_v5.json"
+DB = Path(__file__).parent / "trades_v4.db"
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -60,6 +62,19 @@ def reason_tag(reason: str) -> str:
     return (reason or "?")[:6].upper()
 
 
+def db_entry_close(trade_id: int):
+    try:
+        conn = sqlite3.connect(str(DB))
+        c = conn.cursor()
+        row = c.execute("SELECT COALESCE(entry,0), COALESCE(close_price, entry) FROM trades WHERE id=?", (int(trade_id),)).fetchone()
+        conn.close()
+        if not row:
+            return 0.0, 0.0
+        return float(row[0] or 0.0), float(row[1] or row[0] or 0.0)
+    except Exception:
+        return 0.0, 0.0
+
+
 def render(d: dict, feed: deque[str]):
     width = term_width()
     pnl = d.get("pnl", {})
@@ -95,8 +110,12 @@ def render(d: dict, feed: deque[str]):
         out.append("(none)")
     else:
         for r in rec:
-            entry = float(r.get("entry", 0) or 0)
-            close = float(r.get("close", entry) or entry)
+            rid = int(r.get("id") or 0)
+            if ("entry" in r) and ("close" in r):
+                entry = float(r.get("entry", 0) or 0)
+                close = float(r.get("close", entry) or entry)
+            else:
+                entry, close = db_entry_close(rid)
             pct = ((close - entry) / entry * 100.0) if entry > 0 else 0.0
             pnl_txt = c(float(r.get("pnl_usd", 0) or 0))
             entry_c = int(round(entry * 100.0))
