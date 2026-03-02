@@ -369,13 +369,7 @@ def trades_taken_on_slug(slug: str) -> int:
 def open_positions_total() -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
-    if "closed_ts" in cols and "remaining_size" in cols:
-        q = "SELECT COUNT(*) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0"
-    elif "closed_ts" in cols:
-        q = "SELECT COUNT(*) FROM trades WHERE closed_ts IS NULL"
-    else:
-        q = "SELECT COUNT(*) FROM trades"
+    q = "SELECT COUNT(*) FROM trades WHERE closed_ts IS NULL AND COALESCE(remaining_size,size)>0"
     n = int(c.execute(q).fetchone()[0] or 0)
     conn.close()
     return n
@@ -443,13 +437,7 @@ def resolve_intent(intent_id: int, status: str = "DONE"):
 def open_positions_this_round(slug: str) -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
-    if "closed_ts" in cols and "remaining_size" in cols:
-        c.execute("SELECT COUNT(*) FROM trades WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0", (slug,))
-    elif "closed_ts" in cols:
-        c.execute("SELECT COUNT(*) FROM trades WHERE slug = ? AND closed_ts IS NULL", (slug,))
-    else:
-        c.execute("SELECT COUNT(*) FROM trades WHERE slug = ?", (slug,))
+    c.execute("SELECT COUNT(*) FROM trades WHERE slug = ? AND closed_ts IS NULL AND COALESCE(remaining_size, size) > 0", (slug,))
     n = int(c.fetchone()[0] or 0)
     conn.close()
     return n
@@ -619,13 +607,7 @@ def has_open_opposite_side(slug: str, side: str) -> bool:
     opposite = "BUY_NO" if side == "BUY_YES" else "BUY_YES"
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
-    if "closed_ts" in cols and "remaining_size" in cols:
-        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL AND COALESCE(remaining_size,size)>0"
-    elif "closed_ts" in cols:
-        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL"
-    else:
-        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=?"
+    q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL AND COALESCE(remaining_size,size)>0"
     n = int(c.execute(q, (slug, opposite)).fetchone()[0] or 0)
     conn.close()
     return n > 0
@@ -634,13 +616,7 @@ def has_open_opposite_side(slug: str, side: str) -> bool:
 def open_same_side_count(slug: str, side: str) -> int:
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    cols = [r[1] for r in c.execute("PRAGMA table_info(trades)").fetchall()]
-    if "closed_ts" in cols and "remaining_size" in cols:
-        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL AND COALESCE(remaining_size,size)>0"
-    elif "closed_ts" in cols:
-        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL"
-    else:
-        q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=?"
+    q = "SELECT COUNT(*) FROM trades WHERE slug=? AND side=? AND closed_ts IS NULL AND COALESCE(remaining_size,size)>0"
     n = int(c.execute(q, (slug, side)).fetchone()[0] or 0)
     conn.close()
     return n
