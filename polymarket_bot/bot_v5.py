@@ -593,9 +593,10 @@ def parse_regime_votes(signal_text: str) -> tuple[str | None, int | None]:
     try:
         parts = [p.strip() for p in str(signal_text).split("|")]
         for p in parts:
-            if p.startswith("regime="):
+            pl = p.lower()
+            if pl.startswith("regime="):
                 regime = p.split("=", 1)[1].strip().upper()
-            elif p.startswith("votes="):
+            elif pl.startswith("votes="):
                 raw = p.split("=", 1)[1].strip().split("/", 1)[0]
                 votes = int(raw)
     except Exception:
