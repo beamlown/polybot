@@ -94,6 +94,8 @@ DB = "trades_v4.db"
 BUILD_TAG = "v5.4.2026-03-02.001"
 ENGINE_TAG = "v5_stop_enforcement"
 STATE_PATH = os.path.join(os.path.dirname(__file__), "runtime", "state_v5.json")
+_last_state_write: float = 0.0
+STATE_WRITE_INTERVAL_SEC: int = 15
 
 
 def die(code: int, msg: str):
@@ -198,6 +200,11 @@ def unrealized_pnl_estimate() -> float:
 
 
 def write_state(status_line: str = ""):
+    global _last_state_write
+    now_mono = time.monotonic()
+    if now_mono - _last_state_write < STATE_WRITE_INTERVAL_SEC:
+        return
+    _last_state_write = now_mono
     try:
         os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
         conn = sqlite3.connect(DB)
