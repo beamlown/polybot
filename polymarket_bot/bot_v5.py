@@ -725,7 +725,7 @@ def main():
 
             day_count = trades_today()
             if MAX_TRADES_PER_DAY > 0 and day_count >= MAX_TRADES_PER_DAY:
-                vvprint(f"No trade | daily cap {day_count}/{MAX_TRADES_PER_DAY}")
+                vprint(f"No trade | daily cap {day_count}/{MAX_TRADES_PER_DAY}")
                 time.sleep(LOOP_SECONDS)
                 continue
 
@@ -888,7 +888,7 @@ def main():
                 round_start_ts = None
             elapsed = (now_ts - round_start_ts) if round_start_ts is not None else None
 
-            print(
+            vprint(
                 f"Round: {market.slug} | yes={market.yes_price:.3f} | buy_yes={buy_yes_px:.3f} | buy_no={buy_no_px:.3f} | elapsed={elapsed}s | left={eta_now}s | {stext} | spread={spread} | depth={depth:.1f} | imbalance={imbalance:.2f}"
             )
 
