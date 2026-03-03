@@ -71,6 +71,8 @@ HIGH_CONVICTION_MULTIPLIER = float(os.getenv("HIGH_CONVICTION_MULTIPLIER", "3.0"
 HIGH_CONV_MIN_EDGE = float(os.getenv("HIGH_CONV_MIN_EDGE", "0.22"))
 HIGH_CONV_MIN_PROB = float(os.getenv("HIGH_CONV_MIN_PROB", "0.72"))
 HIGH_CONV_MIN_VOTES = int(os.getenv("HIGH_CONV_MIN_VOTES", "6"))
+MIXED_PROBE_ENABLED = os.getenv("MIXED_PROBE_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+MIXED_RISK_MULT = float(os.getenv("MIXED_RISK_MULT", "0.35"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 MAX_TRADES_PER_SLUG = int(os.getenv("MAX_TRADES_PER_SLUG", "1"))
@@ -1474,9 +1476,22 @@ def main():
             entry_source = "gamma"
             long_allowed = True
             short_allowed = True
+            mixed_probe = False
             if STRONG_REGIME_ONLY and regime is not None and votes is not None:
-                long_allowed = (regime == "BULL" and votes >= BULL_MIN_VOTES)
-                short_allowed = (regime == "BEAR" and votes <= BEAR_MAX_VOTES)
+                if regime == "BULL":
+                    long_allowed = (votes >= BULL_MIN_VOTES)
+                    short_allowed = False
+                elif regime == "BEAR":
+                    long_allowed = False
+                    short_allowed = (votes <= BEAR_MAX_VOTES)
+                elif regime == "MIXED":
+                    if MIXED_PROBE_ENABLED:
+                        long_allowed = True
+                        short_allowed = True
+                        mixed_probe = True
+                    else:
+                        long_allowed = False
+                        short_allowed = False
 
             side_yes_min_edge = MIN_EDGE
             side_no_min_edge = MIN_EDGE
@@ -1595,6 +1610,8 @@ def main():
                 risk_mult = max(1.0, HIGH_CONVICTION_MULTIPLIER)
 
             risk = balance_now * RISK_PCT * risk_mult
+            if mixed_probe:
+                risk *= max(0.05, min(1.0, MIXED_RISK_MULT))
             size = risk / max(entry, 1e-6)
             note = (
                 f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f} "
