@@ -8,6 +8,7 @@ from pathlib import Path
 
 STATE = Path(__file__).parent / "runtime" / "state_v5.json"
 DB = Path(__file__).parent / "trades_v4.db"
+REFRESH_SEC = float(os.getenv("UI_REFRESH_SEC", "0.35"))
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -193,7 +194,7 @@ def main():
             last_status = st
 
         render(d, feed)
-        time.sleep(0.8)
+        time.sleep(max(0.1, REFRESH_SEC))
 
 
 if __name__ == "__main__":

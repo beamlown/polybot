@@ -99,7 +99,7 @@ BUILD_TAG = "v5.4.2026-03-02.001"
 ENGINE_TAG = "v5_stop_enforcement"
 STATE_PATH = os.path.join(os.path.dirname(__file__), "runtime", "state_v5.json")
 _last_state_write: float = 0.0
-STATE_WRITE_INTERVAL_SEC: int = 15
+STATE_WRITE_INTERVAL_SEC: float = float(os.getenv("STATE_WRITE_INTERVAL_SEC", "2.0"))
 
 
 def die(code: int, msg: str):
