@@ -73,6 +73,7 @@ HIGH_CONV_MIN_PROB = float(os.getenv("HIGH_CONV_MIN_PROB", "0.72"))
 HIGH_CONV_MIN_VOTES = int(os.getenv("HIGH_CONV_MIN_VOTES", "6"))
 MIXED_PROBE_ENABLED = os.getenv("MIXED_PROBE_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 MIXED_RISK_MULT = float(os.getenv("MIXED_RISK_MULT", "0.35"))
+MAX_RSI_FOR_LONG = float(os.getenv("MAX_RSI_FOR_LONG", "72"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 MAX_TRADES_PER_SLUG = int(os.getenv("MAX_TRADES_PER_SLUG", "1"))
@@ -1455,6 +1456,13 @@ def main():
                 continue
 
             regime, votes = parse_regime_votes(stext or "")
+            rsi14 = None
+            try:
+                m_rsi = re.search(r"rsi14\s*=\s*([0-9]+(?:\.[0-9]+)?)", str(stext or ""), flags=re.IGNORECASE)
+                if m_rsi:
+                    rsi14 = float(m_rsi.group(1))
+            except Exception:
+                rsi14 = None
             edge_yes = prob - buy_yes_px
             edge_no = (1.0 - prob) - buy_no_px
             fee_yes = estimated_taker_fee_per_share(buy_yes_px) * 2.0
@@ -1539,6 +1547,11 @@ def main():
                 edge = edge_no_net
                 trade_token_id = market.no_token_id
                 entry_source = "clob" if no_best_ask is not None else "gamma"
+
+            if side == "BUY_YES" and rsi14 is not None and rsi14 > MAX_RSI_FOR_LONG:
+                vprint(f"No trade | long blocked by RSI ({rsi14:.1f} > {MAX_RSI_FOR_LONG:.1f})")
+                time.sleep(LOOP_SECONDS)
+                continue
 
             if not side:
                 regime_txt = f"regime={regime} votes={votes}" if regime is not None else "regime=n/a"
