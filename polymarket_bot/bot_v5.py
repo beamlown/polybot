@@ -74,6 +74,7 @@ HIGH_CONV_MIN_VOTES = int(os.getenv("HIGH_CONV_MIN_VOTES", "6"))
 MIXED_PROBE_ENABLED = os.getenv("MIXED_PROBE_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 MIXED_RISK_MULT = float(os.getenv("MIXED_RISK_MULT", "0.35"))
 MAX_RSI_FOR_LONG = float(os.getenv("MAX_RSI_FOR_LONG", "72"))
+MIN_RSI_FOR_SHORT = float(os.getenv("MIN_RSI_FOR_SHORT", "20"))
 LATE_WINDOW_START_SECONDS = int(os.getenv("LATE_WINDOW_START_SECONDS", "250"))
 LATE_WINDOW_RISK_MULT = float(os.getenv("LATE_WINDOW_RISK_MULT", "0.5"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
@@ -1552,6 +1553,10 @@ def main():
 
             if side == "BUY_YES" and rsi14 is not None and rsi14 > MAX_RSI_FOR_LONG:
                 vprint(f"No trade | long blocked by RSI ({rsi14:.1f} > {MAX_RSI_FOR_LONG:.1f})")
+                time.sleep(LOOP_SECONDS)
+                continue
+            if side == "BUY_NO" and rsi14 is not None and rsi14 < MIN_RSI_FOR_SHORT:
+                vprint(f"No trade | short blocked by RSI ({rsi14:.1f} < {MIN_RSI_FOR_SHORT:.1f})")
                 time.sleep(LOOP_SECONDS)
                 continue
 
