@@ -1,0 +1,47 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Polymarket Bot V5",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["C:/Users/johnny/.openclaw/workspace/polymarket_bot/bot_v5.py"],
+      "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "UI Monitor V5.3.1",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["C:/Users/johnny/.openclaw/workspace/polymarket_bot/ui_v531.py"],
+      "port": 3001,
+      "autoPort": true
+    },
+    {
+      "name": "PnL Monitor V4",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["C:/Users/johnny/.openclaw/workspace/polymarket_bot/pnl_v4.py"],
+      "port": 3002,
+      "autoPort": true
+    },
+    {
+      "name": "Dashboard V4",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["C:/Users/johnny/.openclaw/workspace/polymarket_bot/dashboard_v4.py"],
+      "port": 3003,
+      "autoPort": true
+    },
+    {
+      "name": "Market Discovery V4",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["C:/Users/johnny/.openclaw/workspace/polymarket_bot/v4_discovery.py"],
+      "port": 3004,
+      "autoPort": true
+    },
+    {
+      "name": "Status Monitor",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["C:/Users/johnny/.openclaw/workspace/polymarket_bot/status.py"],
+      "port": 3005,
+      "autoPort": true
+    }
+  ]
+}
