@@ -1,0 +1,209 @@
+Polymarket Bot v5.4 — Full Session Report + Patch Notes
+Generated: 2026-03-02 (America/Chicago)
+Owner: Jawn
+
+============================================================
+1) EXECUTIVE SUMMARY
+============================================================
+This session moved the bot from “working but inconsistent” to a much more disciplined and adaptive runtime.
+
+Major outcomes:
+- Confirmed project/code was intact in workspace (not lost).
+- Fixed multiple runtime logic issues (asset routing, vote parsing, signal mapping).
+- Tuned entries to avoid 50c coinflip churn while still allowing trend participation.
+- Added adaptive behavior in mixed regimes (smaller probe risk).
+- Added overbought/oversold RSI guards to prevent late trend-chasing reversals.
+- Improved monitoring responsiveness (state + hybrid UI refresh speed).
+- Moved active universe to BTC + XRP (best performers during this session).
+
+Current posture:
+- Aggressive but controlled.
+- Better in trend legs, safer in chop than earlier.
+- Still vulnerable to violent snap reversals, but significantly improved from the starting point.
+
+
+============================================================
+2) CURRENT LIVE CONFIG (APPROVED)
+============================================================
+Source: .env (current)
+
+MIN_PROB_DISTANCE=0.08
+MIN_SIDE_ADVANTAGE=0.05
+MIN_EDGE=0.09
+MAX_CONCURRENT_TRADES=4
+MAX_ENTRIES_PER_ROUND=3
+MAX_TRADES_PER_SLUG=3
+ENTRY_WINDOW_START_SECONDS=0
+ENTRY_WINDOW_END_SECONDS=280
+MAX_SPREAD=0.02
+MIN_DEPTH_TOP5=200
+BUY_YES_MAX_ENTRY=0.52
+BUY_NO_MAX_ENTRY=0.56
+FAIR_VALUE_DISCOUNT_PCT=0.08
+AUTO_TAKE_PROFIT_PCT=0.35
+AUTO_STOP_LOSS_PCT=0.18
+MAX_STOP_PCT=0.30
+STOP_LOSS_ARMING_DELAY_SECONDS_SL=0
+STOP_LOSS_FINAL_MINUTE_ONLY=false
+STOPLOSS_REENTRY_COOLDOWN_SECONDS=20
+TP_PRINCIPAL_TRIGGER_PCT=0.22
+TP_PRINCIPAL_SELL_FRAC=0.70
+RUNNER_STOP_BUFFER_PCT=0.02
+RUNNER_EXPIRY_CLOSE_SEC=20
+MIN_REENTRY_PRICE_IMPROVEMENT=0.07
+SCALE_IN_MIN_IMPROVEMENT=0.07
+SERIES_PREFIXES=btc-updown,xrp-updown
+QUIET_LOGGING=false
+MAX_TRADES_PER_DAY=0
+MIN_VOLUME24H=0
+STRONG_REGIME_ONLY=true
+BEAR_MAX_VOTES=2
+MIXED_PROBE_ENABLED=true
+MIXED_RISK_MULT=0.35
+HIGH_CONVICTION_MULTIPLIER=2.0
+MAX_RSI_FOR_LONG=72
+MIN_RSI_FOR_SHORT=20
+STATE_WRITE_INTERVAL_SEC=2.0
+UI_REFRESH_SEC=0.35
+LATE_WINDOW_START_SECONDS=250
+LATE_WINDOW_RISK_MULT=0.5
+
+
+============================================================
+3) WHAT WAS FIXED THIS SESSION (APPROVED + APPLIED)
+============================================================
+A) Core correctness fixes
+1) Asset routing fix in bot selection path
+   - ETH/XRP slugs were being treated as BTC in critical path.
+   - Fixed slug->asset mapping in bot_v5.
+
+2) Signal data routing fix (v4_signal)
+   - Added native ETH/XRP feeds:
+     - ETHUSDT + ETH-USD
+     - XRPUSDT + XRP-USD
+
+3) Regime/votes parsing fixes
+   - Parsing was failing in combined tokens and case variants.
+   - Reworked parser to robust regex extraction (regime + votes).
+
+B) Entry quality + behavior tuning
+4) Split cap logic
+   - YES kept tighter than NO to support bearish entries.
+
+5) Mixed regime probe mode
+   - Mixed conditions can trade with reduced size instead of full-size noise entries.
+
+6) Overbought long filter
+   - Blocks BUY_YES when RSI too high (MAX_RSI_FOR_LONG).
+
+7) Oversold short filter
+   - Blocks BUY_NO when RSI too low (MIN_RSI_FOR_SHORT).
+
+8) Late-window half-size logic
+   - Entry window extended to 280s.
+   - Risk automatically reduced in late segment (default 50%).
+
+9) Re-entry/scale-in tightening
+   - Same-side adds now require significantly better price improvement (7c).
+
+C) Monitoring/UI quality improvements
+10) Faster state publishing
+    - State write interval now env-controlled (2s).
+
+11) Faster hybrid UI refresh
+    - UI refresh now env-controlled (0.35s).
+
+
+============================================================
+4) PATCH NOTES (LATEST COMMITS)
+============================================================
+Recent bot-related commits in this session:
+
+- b736218  Block BUY_NO entries in oversold RSI conditions
+- 64c571e  Add late-window risk scaling and extend entry window to 280s via env
+- 5b4b54a  Speed up state writes and hybrid UI refresh for lower-latency display
+- 3bcad2e  Block BUY_YES entries when RSI is overbought
+- 57ec7d8  Add mixed-regime probe mode with reduced risk sizing
+- a982b28  Fix regime/votes parsing for combined signal tokens
+- 45c67ac  Make regime/vote parser case-insensitive
+- daa6feb  Add ETH/XRP price routing to signal model
+- bd0cefb  Fix asset routing for ETH/XRP and prep live-trade unfreeze config
+
+
+============================================================
+5) SESSION OBSERVATIONS (WHAT WE LEARNED)
+============================================================
+1) Trend rounds can perform very well.
+2) Biggest losses came from:
+   - overextended entries,
+   - mixed/chop reversals,
+   - deep oversold/overbought continuation assumptions failing.
+3) Runner logic now behaves correctly:
+   - TP partial triggers,
+   - runner arms,
+   - remainder exits via TP/stop based on movement.
+4) Slug/slot caps prevented overtrading in chaotic end-of-round conditions.
+5) BTC/XRP focus performed better than broad 4-asset operation during this session.
+
+
+============================================================
+6) KNOWN TRADE-OFFS (INTENTIONAL)
+============================================================
+- More strict filters = fewer but cleaner entries.
+- More slots/slugs = more opportunity and more noise exposure.
+- Late-window entries can add edge in trend continuation, but only with reduced size.
+- Mixed-regime probes are intentionally smaller to avoid chop damage.
+
+
+============================================================
+7) HOW TO RUN (CURRENT RECOMMENDED)
+============================================================
+From:
+C:\Users\johnny\.openclaw\workspace\polymarket_bot
+
+1) Bot only:
+   py -3.14 bot_v5.py
+
+2) Full stack (bot + hybrid UI + monitor):
+   launch_all_v531.bat
+
+
+============================================================
+8) STATUS OF APPROVED REQUESTS (CHECKLIST)
+============================================================
+[✓] Restore project and verify workspace integrity
+[✓] Tune entries to avoid 50c churn
+[✓] Enable BTC + XRP focus
+[✓] Turn on detailed logging
+[✓] Disable daily cap
+[✓] Improve re-entry behavior
+[✓] Allow broader slots/entries with better same-side pricing
+[✓] Fix ETH/XRP signal/asset routing bugs
+[✓] Fix votes/regime parse bug
+[✓] Mixed regime smaller-risk probes
+[✓] Overbought long block
+[✓] Oversold short block
+[✓] Faster hybrid UI/state updates
+[✓] Late-window half-size support
+
+
+============================================================
+9) NEXT RECOMMENDED STEP (IF CONTINUING TOMORROW)
+============================================================
+Do a controlled evaluation block (no major config edits) for 100 closed trades under current config.
+Track:
+- R25 / R50 / R100 PnL
+- TP:SL ratio
+- Avg win vs avg loss
+- PnL by market (BTC vs XRP)
+- Late-window contribution (positive/negative)
+
+Then decide whether to:
+- keep MAX_CONCURRENT_TRADES=4
+- tighten/loosen MIN_PROB_DISTANCE
+- further refine late-window risk multiplier.
+
+
+============================================================
+END OF REPORT
+============================================================
