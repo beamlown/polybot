@@ -74,6 +74,8 @@ HIGH_CONV_MIN_VOTES = int(os.getenv("HIGH_CONV_MIN_VOTES", "6"))
 MIXED_PROBE_ENABLED = os.getenv("MIXED_PROBE_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 MIXED_RISK_MULT = float(os.getenv("MIXED_RISK_MULT", "0.35"))
 MAX_RSI_FOR_LONG = float(os.getenv("MAX_RSI_FOR_LONG", "72"))
+LATE_WINDOW_START_SECONDS = int(os.getenv("LATE_WINDOW_START_SECONDS", "250"))
+LATE_WINDOW_RISK_MULT = float(os.getenv("LATE_WINDOW_RISK_MULT", "0.5"))
 MAX_TRADES_PER_DAY = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
 MAX_ENTRIES_PER_ROUND = int(os.getenv("MAX_ENTRIES_PER_ROUND", "1"))
 MAX_TRADES_PER_SLUG = int(os.getenv("MAX_TRADES_PER_SLUG", "1"))
@@ -1625,6 +1627,8 @@ def main():
             risk = balance_now * RISK_PCT * risk_mult
             if mixed_probe:
                 risk *= max(0.05, min(1.0, MIXED_RISK_MULT))
+            if elapsed is not None and elapsed >= LATE_WINDOW_START_SECONDS:
+                risk *= max(0.10, min(1.0, LATE_WINDOW_RISK_MULT))
             size = risk / max(entry, 1e-6)
             note = (
                 f"edge={edge:.4f} spread={spread} depth={depth:.1f} imbalance={imbalance:.2f} "
