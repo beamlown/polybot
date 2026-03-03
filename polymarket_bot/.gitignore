@@ -1,0 +1,21 @@
+# Environment / secrets
+.env
+*.env
+!.env.example
+
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime state
+runtime/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db

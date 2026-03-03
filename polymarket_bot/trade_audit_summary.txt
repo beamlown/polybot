@@ -1,0 +1,10 @@
+Total trades: 386
+Closed: 386 Wins: 152 Losses: 234 Flat: 0
+Realized PnL: -164.28
+
+By close_note:
+- auto_stop_loss: count=222, pnl=-515.84
+- expired_sweep_auto_close: count=16, pnl=-11.94
+- round_expired_auto_close: count=4, pnl=0.51
+- partial_take_profit: count=3, pnl=9.20
+- auto_take_profit: count=141, pnl=353.80

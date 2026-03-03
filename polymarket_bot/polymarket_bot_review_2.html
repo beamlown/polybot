@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Polymarket Bot Review v2</title>
+  <style>
+    body{font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:#0f1115;color:#e7ebf3;margin:0}
+    .wrap{max-width:1050px;margin:0 auto;padding:28px}
+    .card{background:#151923;border:1px solid #2a3140;border-radius:10px;padding:16px;margin:12px 0}
+    h1,h2,h3{margin:8px 0 12px}
+    .muted{color:#98a2b3}
+    .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+    .k{font-size:12px;color:#98a2b3;text-transform:uppercase;letter-spacing:.08em}
+    .v{font-size:24px;font-weight:700}
+    .pos{color:#4ade80}.neg{color:#f87171}.warn{color:#facc15}
+    ul{margin:8px 0 8px 20px}
+    code{background:#0b0d12;padding:2px 6px;border-radius:4px;color:#93c5fd}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px 10px;border-bottom:1px solid #2a3140;text-align:left}
+    th{color:#98a2b3;font-size:12px;text-transform:uppercase}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#22304a;color:#93c5fd}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Polymarket Bot — Updated Review (v2)</h1>
+    <div class="muted">Generated: 2026-03-02 (session-based) • Build: v5.4.2026-03-02.001 • Engine: v5_stop_enforcement</div>
+
+    <div class="card">
+      <h2>Current Live Snapshot</h2>
+      <div class="grid">
+        <div><div class="k">Net PnL</div><div class="v neg">-$172.41</div></div>
+        <div><div class="k">R25</div><div class="v warn">+0.76</div></div>
+        <div><div class="k">R50</div><div class="v pos">+8.18</div></div>
+        <div><div class="k">R100</div><div class="v pos">+6.98</div></div>
+      </div>
+      <p class="muted">Open slots: 2/4 • Open positions: BTC BUY_NO, XRP BUY_NO • Total trades: 883</p>
+    </div>
+
+    <div class="card">
+      <h2>What Was Fixed Today (Approved + Applied)</h2>
+      <ul>
+        <li>ETH/XRP asset routing fixed in bot and signal model.</li>
+        <li>Regime/votes parser fixed (case and combined-token robustness).</li>
+        <li>Mixed-regime probe mode added with reduced risk sizing.</li>
+        <li>Overbought long block added (<code>MAX_RSI_FOR_LONG</code>).</li>
+        <li>Oversold short block added (<code>MIN_RSI_FOR_SHORT</code>).</li>
+        <li>Late-window half-size logic added for 250s+ entries.</li>
+        <li>Hybrid UI and state file refresh speed increased.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Current Approved Runtime Profile</h2>
+      <table>
+        <tr><th>Area</th><th>Setting</th><th>Value</th></tr>
+        <tr><td>Universe</td><td>SERIES_PREFIXES</td><td>btc-updown, xrp-updown</td></tr>
+        <tr><td>Risk</td><td>MAX_CONCURRENT_TRADES</td><td>4</td></tr>
+        <tr><td>Entry Window</td><td>ENTRY_WINDOW_START/END</td><td>0s / 280s</td></tr>
+        <tr><td>Late Window</td><td>LATE_WINDOW_START / RISK_MULT</td><td>250s / 0.5</td></tr>
+        <tr><td>Entry Caps</td><td>BUY_YES_MAX / BUY_NO_MAX</td><td>0.52 / 0.56</td></tr>
+        <tr><td>Re-entry</td><td>MIN_REENTRY / SCALE_IN_IMPROVEMENT</td><td>0.07 / 0.07</td></tr>
+        <tr><td>Stops/TP</td><td>SL / TP</td><td>0.18 / 0.35</td></tr>
+        <tr><td>RSI Guards</td><td>MAX_RSI_FOR_LONG / MIN_RSI_FOR_SHORT</td><td>72 / 20</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Patch Notes (Latest)</h2>
+      <ul>
+        <li><code>b736218</code> — Block BUY_NO entries in oversold RSI conditions</li>
+        <li><code>64c571e</code> — Late-window risk scaling + 280s support</li>
+        <li><code>5b4b54a</code> — Faster state writes + hybrid UI refresh</li>
+        <li><code>3bcad2e</code> — Block BUY_YES entries in overbought RSI</li>
+        <li><code>57ec7d8</code> — Mixed-regime probe mode with reduced sizing</li>
+        <li><code>a982b28</code> — Fix regime/votes parsing</li>
+        <li><code>daa6feb</code> — Add ETH/XRP routing in signal model</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Session Findings</h2>
+      <ul>
+        <li>Best sequences came from early trend-aligned entries with spread discipline.</li>
+        <li>Main loss mode: snap reversals after deep oversold/overbought moves (now partly guarded).</li>
+        <li>Slug/slot caps prevented overtrading in exhausted rounds.</li>
+        <li>Runner behavior is now functioning (partial TP + armed remainder exits).</li>
+      </ul>
+      <p><span class="pill">Status</span> Bot is now in a stable “controlled aggression” profile. Not perfect, but much better than session start.</p>
+    </div>
+
+    <div class="card">
+      <h2>Recommended Next Step</h2>
+      <p>Hold config steady for one full evaluation block (e.g., next 100 closed trades), then compare:</p>
+      <ul>
+        <li>R25 / R50 / R100 trend consistency</li>
+        <li>TP:SL ratio and avg win vs avg loss</li>
+        <li>Late-window contribution (positive or drag)</li>
+        <li>BTC vs XRP contribution split</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
